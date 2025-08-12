@@ -1,6 +1,20 @@
-!host.json
-!/**/function.json
+# Azure Functions (Python) - recommended .funcignore
+# Keep source code; ignore only build artifacts and local envs.
+
 __pycache__/
 .venv/
-.env/
+.env
+.env.*
+*.pyc
+*.pyo
+*.pyd
 *.log
+dist/
+build/
+bin/
+obj/
+*.zip
+node_modules/
+tests/
+.vscode/
+.idea/

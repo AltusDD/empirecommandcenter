@@ -1,0 +1,45 @@
+name: Deploy (Azure Functions — OIDC)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  FUNCTION_APP_NAME: empirecommandcenter-altus
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Functions project layout
+        run: |
+          if [ ! -f "host.json" ]; then
+            echo "::error::host.json not found at repo root. Ensure this is an Azure Functions app or set package to the functions directory."
+            exit 1
+          fi
+          if ! find . -maxdepth 2 -name "function.json" | grep -q .; then
+            echo "::error::No function.json found. Each function must have a folder with function.json."
+            exit 1
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Functions
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.FUNCTION_APP_NAME }}
+          package: .
+          respect-funcignore: true
+          remote-build: true

@@ -41,11 +41,19 @@ jobs:
           if [ "$http_code" != "200" ]; then
             echo "::error::HTTP $http_code from Supabase RPC"; echo "--- Response body ---"; cat manifest_live.json; exit 1;
           fi
-          jq -S '.' manifest_live.json > manifest_live.sorted.json
-          mv manifest_live.sorted.json manifest_live.json
 
-      - name: Normalize repo manifest
-        run: jq -S '.' schema/manifest.json > manifest_repo.json
+      - name: Normalize manifests (ignore timestamp & sort arrays)
+        run: |
+          norm='del(.generated_at)
+            | .tables    |= ( . // [] | sort_by(.table_name) )
+            | .views     |= ( . // [] | sort_by(.view_name) )
+            | .functions |= ( . // [] | sort_by(.name) )
+            | .triggers  |= ( . // [] | sort_by(.trigger_name) )
+            | .enums     |= ( . // [] | sort_by(.enum_name) )
+            | .sequences |= ( . // [] | sort_by(.sequence_name) )'
+          jq -S "$norm" schema/manifest.json  > manifest_repo.json
+          jq -S "$norm" manifest_live.json   > manifest_live.json.norm
+          mv manifest_live.json.norm manifest_live.json
 
       - name: Diff manifests
         run: |

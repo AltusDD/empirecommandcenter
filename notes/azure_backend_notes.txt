@@ -1,0 +1,6 @@
+AZURE BACKEND NOTES (read)
+- App settings required: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+- Optional: ECC_CACHE_SECONDS (default 60), ECC_DEBUG (true/false)
+- Health:    /api/_audit/diag  --> 200s on views means DB is wired
+- Portfolio: /api/portfolio/properties | /units | /leases
+- Deploy via GitHub Action: Deploy (Azure Functions — Publish Profile, Build)

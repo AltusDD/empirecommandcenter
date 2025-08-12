@@ -1,0 +1,5 @@
+DROPBOX NOTES (read)
+- Required app settings: DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN
+- Optional health endpoint (if you added it): /api/_audit/dropbox?code=<FUNCTION_KEY>
+- Upload endpoint (function key required): /api/upload
+- Folder provisioning trigger is in Supabase SQL migration (calls /api/dropbox_provision_folders)

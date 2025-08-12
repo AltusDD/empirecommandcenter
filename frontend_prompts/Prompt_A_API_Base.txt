@@ -1,0 +1,6 @@
+Create /lib/api.ts (or api.js) with:
+- const BASE_URL = "https://empirecommandcenter-altus.azurewebsites.net/api"
+- export async function getJson(path: string, params?: Record<string,string|number>):
+  - build URL with query: limit, offset, order if provided
+  - fetch with try/catch; return JSON; on error, throw Error including status + text
+- if (window.ENV?.API_BASE) use that instead of BASE_URL (for future flexibility)

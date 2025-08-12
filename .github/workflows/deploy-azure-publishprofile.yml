@@ -1,20 +1,12 @@
 name: Deploy (Azure Functions — Publish Profile, Build)
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
+on: { workflow_dispatch: {} }
+permissions: { contents: read }
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Deploy to Azure Functions (Publish Profile, with Oryx build)
-        uses: Azure/functions-action@v1
+      - uses: actions/checkout@v4
+      - uses: Azure/functions-action@v1
         with:
           app-name: empirecommandcenter-altus
           package: .

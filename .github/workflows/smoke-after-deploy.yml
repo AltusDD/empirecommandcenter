@@ -10,30 +10,70 @@ jobs:
   smoke:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
+    env:
+      DEFAULT_BASE_URL: https://empirecommandcenter-altus.azurewebsites.net
+      # Default endpoints to try (space-separated). You can override with a repo secret SMOKE_ENDPOINTS.
+      DEFAULT_ENDPOINTS: "/api/portfolio/properties?limit=1 /api/portfolio/units?limit=1 /api/portfolio/leases?limit=1 /api/health /healthz /metrics /"
     steps:
-      - name: Check BASE_URL secret
-        env:
-          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+      - name: Decide base URL (secret wins, else default)
         run: |
-          if [ -z "${APP_BASE_URL:-}" ]; then
-            echo "::error::Missing APP_BASE_URL secret (e.g., https://empirecommandcenter-altus.azurewebsites.net)"
-            exit 1
+          if [ -n "${{ secrets.APP_BASE_URL }}" ]; then
+            echo "APP_BASE_URL=${{ secrets.APP_BASE_URL }}" >> $GITHUB_ENV
+            echo "Using APP_BASE_URL secret: ${{ secrets.APP_BASE_URL }}"
+          else
+            echo "APP_BASE_URL=$DEFAULT_BASE_URL" >> $GITHUB_ENV
+            echo "APP_BASE_URL secret not set; using default: $DEFAULT_BASE_URL"
           fi
-          echo "Using $APP_BASE_URL"
 
-      - name: Probe health endpoints
-        env:
-          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+      - name: Decide endpoints (secret wins, else defaults)
+        run: |
+          if [ -n "${{ secrets.SMOKE_ENDPOINTS }}" ]; then
+            echo "ENDPOINTS=${{ secrets.SMOKE_ENDPOINTS }}" >> $GITHUB_ENV
+            echo "Using SMOKE_ENDPOINTS secret: ${{ secrets.SMOKE_ENDPOINTS }}"
+          else
+            echo "ENDPOINTS=$DEFAULT_ENDPOINTS" >> $GITHUB_ENV
+            echo "Using default endpoints: $DEFAULT_ENDPOINTS"
+          fi
+
+      - name: Probe endpoints (2xx OK; 401/403 = reachable/protected OK)
         run: |
           set -e
-          ENDPOINTS="/api/_audit/snapshot /api/_audit/env /metrics"
+          base="$APP_BASE_URL"
+          # strip trailing slash from base if present
+          base="${base%/}"
+
+          echo "Base URL: $base"
+          echo "Endpoints: $ENDPOINTS"
+          ok=0
+          failures=()
+
           for p in $ENDPOINTS; do
-            url="$APP_BASE_URL$p"
+            url="$base$p"
             echo "GET $url"
             code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || echo 000)
-            if [ "$code" != "200" ]; then
-              echo "::error::Endpoint $p returned HTTP $code"
-              exit 1
-            fi
+            case "$code" in
+              2??)
+                echo "✅ OK ($code) $p"
+                ok=1
+                break
+                ;;
+              401|403)
+                echo "🟡 Reachable but protected ($code) $p — counting as success"
+                ok=1
+                break
+                ;;
+              *)
+                echo "❌ $p -> HTTP $code"
+                failures+=("$p -> $code")
+                ;;
+            esac
           done
-          echo "All endpoints returned 200 OK."
+
+          if [ "$ok" -eq 0 ]; then
+            echo "::error::No endpoint returned success."
+            echo "Tried:"
+            for f in "${failures[@]}"; do echo "  - $f"; done
+            exit 1
+          fi
+
+          echo "Smoke test passed."

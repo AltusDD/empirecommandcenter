@@ -33,11 +33,7 @@ jobs:
           fi
           RPC="$SUPABASE_URL/rest/v1/rpc/export_schema_manifest"
           echo "Calling $RPC"
-          http_code=$(curl -sS -w "%{http_code}" -o manifest_live.json -X POST "$RPC" \
-            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"schema_name":"public"}')
+          http_code=$(curl -sS -w "%{http_code}" -o manifest_live.json -X POST "$RPC"             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY"             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"             -H "Content-Type: application/json"             -d '{"schema_name":"public"}')
           if [ "$http_code" != "200" ]; then
             echo "::error::HTTP $http_code from Supabase RPC"; echo "--- Response body ---"; cat manifest_live.json; exit 1;
           fi

@@ -28,7 +28,7 @@ jobs:
           echo "::error::No host.json found at repo root or in api/, functions/, backend/. Tell me where it is or move it."
           exit 1
 
-      - name: Deploy with publish profile
+      - name: Deploy with publish profile (remote build + .funcignore)
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ env.FUNCTION_APP_NAME }}

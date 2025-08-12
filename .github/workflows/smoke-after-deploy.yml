@@ -1,0 +1,39 @@
+name: Smoke Test (after Deploy)
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Deploy (Azure Functions — Publish Profile, auto-detect)"]
+    types: [completed]
+
+jobs:
+  smoke:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check BASE_URL secret
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+        run: |
+          if [ -z "${APP_BASE_URL:-}" ]; then
+            echo "::error::Missing APP_BASE_URL secret (e.g., https://empirecommandcenter-altus.azurewebsites.net)"
+            exit 1
+          fi
+          echo "Using $APP_BASE_URL"
+
+      - name: Probe health endpoints
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+        run: |
+          set -e
+          ENDPOINTS="/api/_audit/snapshot /api/_audit/env /metrics"
+          for p in $ENDPOINTS; do
+            url="$APP_BASE_URL$p"
+            echo "GET $url"
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || echo 000)
+            if [ "$code" != "200" ]; then
+              echo "::error::Endpoint $p returned HTTP $code"
+              exit 1
+            fi
+          done
+          echo "All endpoints returned 200 OK."

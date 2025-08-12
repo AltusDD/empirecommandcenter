@@ -1,0 +1,42 @@
+name: Schema Sync (HTTP)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure schema dir
+        run: mkdir -p schema
+
+      - name: Export manifest.json via Supabase REST RPC
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY repo secrets"; exit 1;
+          fi
+          RPC="$SUPABASE_URL/rest/v1/rpc/export_schema_manifest"
+          echo "Calling $RPC"
+          curl -sS -X POST "$RPC"             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY"             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"             -H "Content-Type: application/json"             -d '{"schema_name":"public"}'             | jq '.' > schema/manifest.json
+
+      - name: Create PR with updates
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(schema): sync manifest.json (HTTP)"
+          title: "Schema Sync — manifest.json (HTTP)"
+          body: "Automated update of schema/manifest.json using Supabase REST RPC (no direct DB connection)."
+          branch: "chore/schema-sync-http"
+          add-paths: |
+            schema/manifest.json

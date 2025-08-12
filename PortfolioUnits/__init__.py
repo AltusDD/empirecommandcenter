@@ -1,4 +1,5 @@
 import azure.functions as func
-from .common import units
+from .common import handle
+
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    return units(req)
+    return handle("units_v", req)

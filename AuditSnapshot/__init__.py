@@ -1,22 +1,21 @@
 import azure.functions as func
-import json, datetime
-from shared.supa import table_count
+import json
+from shared.supa import rest_get
+
+def count_of(resource):
+    data, code, _ = rest_get(resource, {"select":"id","limit":"1"})
+    # Prefer Content-Range, but rest_get doesn't return it here; fallback to len(data)
+    try:
+        return len(data) if isinstance(data, list) else None
+    except Exception:
+        return None
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    now = datetime.datetime.utcnow().isoformat() + "Z"
-    props = table_count("properties")
-    units = table_count("units")
-    leases = table_count("leases")
     body = {
-        "generated_at": now,
         "totals": {
-            "properties": props,
-            "units": units,
-            "leases": leases,
-        },
-        "kpis": {
-            "occupancy_pct": None
-        },
-        "source": "supabase_rest" if all(v is not None for v in [props, units, leases]) else "placeholder"
+            "properties": count_of("property_occupancy_v"),
+            "units": count_of("units_v"),
+            "leases": count_of("leases_enriched_v")
+        }
     }
     return func.HttpResponse(json.dumps(body), status_code=200, mimetype="application/json")

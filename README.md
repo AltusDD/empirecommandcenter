@@ -1,15 +1,21 @@
-# ECC Health Pack (Python, Azure Functions)
+# ECC Portfolio API (Python, Azure Functions)
 
-Adds four endpoints:
-- GET /api/health
-- GET /api/_audit/snapshot
-- GET /api/_audit/env
-- GET /api/metrics
+Adds these endpoints (anonymous GET):
+- /api/portfolio/properties
+- /api/portfolio/units
+- /api/portfolio/leases
+- /api/_audit/snapshot (uses Supabase counts if configured)
 
-## Install
-1) Extract this ZIP.
-2) Put everything at the **repo root** (same level as your existing `host.json`). If you already have a `host.json`, keep yours.
-3) Commit & push to `main`.
-4) Run **Deploy (Azure Functions — Publish Profile, auto-detect)** in GitHub Actions.
+## Configure (once in Azure Portal → Function App → Configuration → Application settings)
+- SUPABASE_URL = https://<your-project>.supabase.co
+- SUPABASE_SERVICE_ROLE_KEY = <service role key>
 
-> This pack is for **Python** Function Apps.
+## Deploy
+1) Extract this ZIP at the repo root (same level as host.json).
+2) Commit & push to main.
+3) Run the "Deploy (Azure Functions — Publish Profile, auto-detect)" workflow.
+4) Run "Smoke Test (after Deploy)".
+
+Notes:
+- Query params (limit, offset, order, filters) are passed through to Supabase REST.
+- If the tables are named differently, tell me the correct names and I’ll adjust.

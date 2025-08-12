@@ -1,4 +1,4 @@
-name: Schema Drift (Strict, HTTP)
+name: Schema Drift (Strict, HTTP safe)
 
 on:
   push:
@@ -19,17 +19,30 @@ jobs:
         run: |
           test -f schema/manifest.json || (echo 'schema/manifest.json missing from repo'; exit 1)
 
-      - name: Fetch live manifest via Supabase REST RPC
+      - name: Fetch live manifest via Supabase REST RPC (fail on HTTP error)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
             echo "::error::Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY repo secrets"; exit 1;
+          fi
+          if echo "$SUPABASE_URL" | grep -qiE '^postgres(ql)?://'; then
+            echo "::error::SUPABASE_URL must be the HTTPS URL (e.g., https://<project>.supabase.co), not the postgres URI."; exit 1;
           fi
           RPC="$SUPABASE_URL/rest/v1/rpc/export_schema_manifest"
           echo "Calling $RPC"
-          curl -sS -X POST "$RPC"             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY"             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"             -H "Content-Type: application/json"             -d '{"schema_name":"public"}'             | jq -S '.' > manifest_live.json
+          http_code=$(curl -sS -w "%{http_code}" -o manifest_live.json -X POST "$RPC" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"schema_name":"public"}')
+          if [ "$http_code" != "200" ]; then
+            echo "::error::HTTP $http_code from Supabase RPC"; echo "--- Response body ---"; cat manifest_live.json; exit 1;
+          fi
+          jq -S '.' manifest_live.json > manifest_live.sorted.json
+          mv manifest_live.sorted.json manifest_live.json
 
       - name: Normalize repo manifest
         run: jq -S '.' schema/manifest.json > manifest_repo.json
@@ -43,10 +56,3 @@ jobs:
             cat manifest.diff
             exit 1
           fi
-
-      - name: Upload diff (if any)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: schema-manifest-drift
-          path: manifest.diff

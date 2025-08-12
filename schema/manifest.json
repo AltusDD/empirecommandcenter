@@ -3,8 +3,18 @@
   "views": [
     {
       "kind": "VIEW",
+      "view_name": "active_leases_v",
+      "definition": " SELECT l.id AS lease_id,\n    l.property_id,\n    l.unit_id,\n    lt.tenant_id,\n    l.start_date,\n    l.end_date,\n    l.status\n   FROM leases l\n     LEFT JOIN lease_tenants lt ON lt.lease_id = l.id\n  WHERE (lower(COALESCE(l.status, ''::text)) = ANY (ARRAY['active'::text, 'renewal'::text, 'holdover'::text, 'month_to_month'::text, 'mtm'::text])) AND l.start_date <= CURRENT_DATE AND (l.end_date IS NULL OR l.end_date >= CURRENT_DATE);"
+    },
+    {
+      "kind": "VIEW",
       "view_name": "get_full_work_orders_view",
       "definition": " SELECT 'TODO: Replace with actual view logic for get_full_work_orders_view.sql'::text AS \"?column?\";"
+    },
+    {
+      "kind": "VIEW",
+      "view_name": "leases_enriched_v",
+      "definition": " SELECT l.id AS lease_id,\n    l.start_date,\n    l.end_date,\n    l.status,\n    l.rent_cents,\n    p.id AS property_id,\n    p.name AS property_name,\n    u.id AS unit_id,\n    u.unit_number AS unit_name,\n    COALESCE(string_agg(t.full_name, ', '::text ORDER BY t.full_name), ''::text) AS tenant_names\n   FROM leases l\n     LEFT JOIN properties p ON p.id = l.property_id\n     LEFT JOIN units u ON u.id = l.unit_id\n     LEFT JOIN lease_tenants lt ON lt.lease_id = l.id\n     LEFT JOIN tenants t ON t.id = lt.tenant_id\n  GROUP BY l.id, p.id, p.name, u.id, u.unit_number;"
     },
     {
       "kind": "VIEW",
@@ -48,6 +58,16 @@
     },
     {
       "kind": "VIEW",
+      "view_name": "owners_summary_v",
+      "definition": " SELECT o.id AS owner_id,\n    o.full_name AS owner_name,\n    count(DISTINCT po.property_id) AS property_count,\n    count(DISTINCT uv.id) AS unit_count,\n    count(DISTINCT uv.id) FILTER (WHERE uv.occupancy_status = 'occupied'::text) AS occupied_unit_count\n   FROM owners o\n     LEFT JOIN property_owners po ON po.owner_id = o.id\n     LEFT JOIN units_v uv ON uv.property_id = po.property_id\n  GROUP BY o.id, o.full_name;"
+    },
+    {
+      "kind": "VIEW",
+      "view_name": "property_occupancy_v",
+      "definition": " SELECT p.id AS property_id,\n    p.name AS property_name,\n    count(uv.id) AS total_units,\n    count(uv.id) FILTER (WHERE uv.occupancy_status = 'occupied'::text) AS occupied_units,\n    count(uv.id) FILTER (WHERE uv.occupancy_status = 'vacant'::text) AS vacant_units,\n        CASE\n            WHEN count(uv.id) > 0 THEN round(100.0 * count(uv.id) FILTER (WHERE uv.occupancy_status = 'occupied'::text)::numeric / count(uv.id)::numeric, 2)\n            ELSE 0::numeric\n        END AS occupancy_pct\n   FROM properties p\n     LEFT JOIN units_v uv ON uv.property_id = p.id\n  GROUP BY p.id, p.name;"
+    },
+    {
+      "kind": "VIEW",
       "view_name": "sync_leases",
       "definition": " SELECT 'TODO: Replace with actual view logic for sync_leases.sql'::text AS \"?column?\";"
     },
@@ -80,6 +100,16 @@
       "kind": "VIEW",
       "view_name": "sync_work_orders",
       "definition": " SELECT 'TODO: Replace with actual view logic for sync_work_orders.sql'::text AS \"?column?\";"
+    },
+    {
+      "kind": "VIEW",
+      "view_name": "tenants_list_v",
+      "definition": " SELECT t.id AS tenant_id,\n    t.full_name,\n        CASE\n            WHEN (EXISTS ( SELECT 1\n               FROM lease_tenants lt\n                 JOIN active_leases_v al ON al.lease_id = lt.lease_id\n              WHERE lt.tenant_id = t.id)) THEN 'active'::text\n            ELSE 'none'::text\n        END AS lease_status\n   FROM tenants t;"
+    },
+    {
+      "kind": "VIEW",
+      "view_name": "units_v",
+      "definition": " SELECT u.id,\n    u.doorloop_id,\n    u.unit_number,\n    u.beds,\n    u.baths,\n    u.sq_ft,\n    u.rent_amount,\n    u.doorloop_property_id,\n    u.created_at,\n    u.updated_at,\n    u.status,\n    u.property_id,\n        CASE\n            WHEN (EXISTS ( SELECT 1\n               FROM active_leases_v al\n              WHERE al.unit_id = u.id)) THEN 'occupied'::text\n            ELSE 'vacant'::text\n        END AS occupancy_status\n   FROM units u;"
     }
   ],
   "schema": "public",
@@ -7001,6 +7031,10 @@
       ],
       "indexes": [
         {
+          "name": "idx_lease_tenants_tenant",
+          "definition": "CREATE INDEX idx_lease_tenants_tenant ON public.lease_tenants USING btree (tenant_id)"
+        },
+        {
           "name": "lease_tenants_pkey",
           "definition": "CREATE UNIQUE INDEX lease_tenants_pkey ON public.lease_tenants USING btree (lease_id, tenant_id)"
         }
@@ -7162,6 +7196,10 @@
         {
           "name": "idx_leases_status",
           "definition": "CREATE INDEX idx_leases_status ON public.leases USING btree (status)"
+        },
+        {
+          "name": "idx_leases_status_dates",
+          "definition": "CREATE INDEX idx_leases_status_dates ON public.leases USING btree (status, start_date, end_date)"
         },
         {
           "name": "idx_leases_status_unit",
@@ -7878,6 +7916,10 @@
       ],
       "indexes": [
         {
+          "name": "idx_properties_doorloop_id",
+          "definition": "CREATE INDEX idx_properties_doorloop_id ON public.properties USING btree (doorloop_id)"
+        },
+        {
           "name": "properties_doorloop_id_key",
           "definition": "CREATE UNIQUE INDEX properties_doorloop_id_key ON public.properties USING btree (doorloop_id)"
         },
@@ -8396,12 +8438,24 @@
           "data_type": "text",
           "is_nullable": "YES",
           "column_default": null
+        },
+        {
+          "name": "property_id",
+          "identity": "NO",
+          "udt_name": "int8",
+          "data_type": "bigint",
+          "is_nullable": "YES",
+          "column_default": null
         }
       ],
       "indexes": [
         {
           "name": "idx_units_doorloop_property",
           "definition": "CREATE INDEX idx_units_doorloop_property ON public.units USING btree (doorloop_property_id)"
+        },
+        {
+          "name": "idx_units_doorloop_property_id",
+          "definition": "CREATE INDEX idx_units_doorloop_property_id ON public.units USING btree (doorloop_property_id)"
         },
         {
           "name": "uniq_units_doorloop_id",
@@ -8419,9 +8473,24 @@
       "table_name": "units",
       "primary_key": [
         "id",
+        "id",
         "id"
       ],
-      "foreign_keys": []
+      "foreign_keys": [
+        {
+          "columns": [
+            "property_id"
+          ],
+          "on_delete": "a",
+          "on_update": "a",
+          "ref_table": "properties",
+          "ref_schema": "public",
+          "ref_columns": [
+            "id"
+          ],
+          "constraint_name": "fk_units_property"
+        }
+      ]
     },
     {
       "columns": [
@@ -8877,5 +8946,5 @@
     "supabase_vault",
     "pg_graphql"
   ],
-  "generated_at": "2025-08-12T20:16:23.373811+00:00"
+  "generated_at": "2025-08-12T21:11:01.059769+00:00"
 }

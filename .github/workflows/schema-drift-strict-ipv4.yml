@@ -1,4 +1,4 @@
-name: Schema Drift (Strict, IPv4)
+name: Schema Drift (Strict, IPv4 robust)
 
 on:
   push:
@@ -18,20 +18,37 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client jq diffutils
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client jq diffutils dnsutils net-tools
 
       - name: Validate required files exist
         run: |
           test -f schema/manifest.json || (echo 'schema/manifest.json missing'; exit 1)
           test -f schema/schema.sql || (echo 'schema/schema.sql missing'; exit 1)
 
-      - name: Force IPv4 for Supabase
+      - name: Resolve Supabase host to IPv4 (with fallbacks)
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
+          set -e
+          if [ -z "$DATABASE_URL" ]; then echo "::error::SUPABASE_DB_URL secret is missing"; exit 1; fi
           HOST=$(echo "$DATABASE_URL" | sed -E 's#.*@([^:/]+).*#\1#')
+          echo "Target host: $HOST"
+
           IPV4=$(getent ahostsv4 "$HOST" | awk 'NR==1{print $1}')
-          if [ -z "$IPV4" ]; then echo "Could not resolve IPv4 for $HOST"; exit 1; fi
+          if [ -z "$IPV4" ]; then IPV4=$(dig +short A "$HOST" | head -n1); fi
+          if [ -z "$IPV4" ]; then IPV4=$(dig +short A "$HOST" @1.1.1.1 | head -n1); fi
+          if [ -z "$IPV4" ]; then IPV4=$(nslookup -type=A "$HOST" 1.1.1.1 | awk '/^Address: /{print $2; exit}'); fi
+
+          if [ -z "$IPV4" ]; then
+            echo "::group::DNS debug"
+            getent ahosts "$HOST" || true
+            dig +short A "$HOST" || true
+            dig +short A "$HOST" @1.1.1.1 || true
+            echo "::endgroup::"
+            echo "::error::Could not resolve an IPv4 address for $HOST"
+            exit 1
+          fi
+
           echo "Resolved $HOST -> $IPV4"
           echo "DBV4=$(echo "$DATABASE_URL" | sed "s@$HOST@$IPV4@g")" >> $GITHUB_ENV
 
@@ -79,7 +96,7 @@ jobs:
                    )) AS foreign_keys
             FROM pg_constraint c
             JOIN pg_class cl ON cl.oid=c.conrelid
-            JOIN pg_namespace n ON n.oid=cl.relnamespace
+            JOIN pg_namespace n ON n.oid=cl.relenamespace
             JOIN pg_class ref_cl ON ref_cl.oid=c.confrelid
             JOIN pg_namespace ref_n ON ref_n.oid=ref_cl.relnamespace
             LEFT JOIN LATERAL (

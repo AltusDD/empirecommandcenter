@@ -1,10 +1,11 @@
-# Keep Functions essentials
+# Essentials to keep
 !host.json
 !/**/function.json
 
-# Node / build artifacts
-node_modules/
+# Artifacts
+__pycache__/
+.venv/
+.env/
 dist/
 build/
-coverage/
 *.log

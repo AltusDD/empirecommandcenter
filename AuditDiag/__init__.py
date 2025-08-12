@@ -8,8 +8,7 @@ def try_call(base, key, resource):
     try:
         r = requests.get(url, params={"select":"*","limit":"1"},
                          headers={"apikey": key, "Authorization": f"Bearer {key}"}, timeout=15)
-        body = r.text[:200]
-        return {"status": r.status_code, "body_snippet": body}
+        return {"status": r.status_code, "content_range": r.headers.get("Content-Range"), "snippet": r.text[:300]}
     except Exception as e:
         return {"error": str(e)}
 

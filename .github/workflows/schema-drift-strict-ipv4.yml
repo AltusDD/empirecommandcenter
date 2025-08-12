@@ -1,0 +1,166 @@
+name: Schema Drift (Strict, IPv4)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+  schedule:
+    - cron: '30 5 * * *'
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-latest
+    env:
+      PGCONNECT_TIMEOUT: '20'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client jq diffutils
+
+      - name: Validate required files exist
+        run: |
+          test -f schema/manifest.json || (echo 'schema/manifest.json missing'; exit 1)
+          test -f schema/schema.sql || (echo 'schema/schema.sql missing'; exit 1)
+
+      - name: Force IPv4 for Supabase
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          HOST=$(echo "$DATABASE_URL" | sed -E 's#.*@([^:/]+).*#\1#')
+          IPV4=$(getent ahostsv4 "$HOST" | awk 'NR==1{print $1}')
+          if [ -z "$IPV4" ]; then echo "Could not resolve IPv4 for $HOST"; exit 1; fi
+          echo "Resolved $HOST -> $IPV4"
+          echo "DBV4=$(echo "$DATABASE_URL" | sed "s@$HOST@$IPV4@g")" >> $GITHUB_ENV
+
+      - name: Export live manifest
+        run: |
+          cat > export_manifest.sql <<'SQL'
+          WITH tables AS (
+            SELECT c.oid AS table_oid, t.table_name,
+                   jsonb_agg(jsonb_build_object(
+                     'name', col.column_name,
+                     'data_type', col.data_type,
+                     'udt_name', col.udt_name,
+                     'is_nullable', col.is_nullable,
+                     'column_default', col.column_default,
+                     'identity', col.is_identity
+                   ) ORDER BY col.ordinal_position) AS columns
+            FROM information_schema.tables t
+            JOIN information_schema.columns col
+              ON col.table_schema = t.table_schema AND col.table_name = t.table_name
+            JOIN pg_class c ON c.relname = t.table_name
+            JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = t.table_schema
+            WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+            GROUP BY c.oid, t.table_name
+          ),
+          pks AS (
+            SELECT c.conrelid AS table_oid,
+                   jsonb_agg(att.attname ORDER BY s.i) AS pk_columns
+            FROM (SELECT c.conrelid, c.conkey, generate_subscripts(c.conkey,1) AS i
+                  FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
+                  WHERE c.contype='p' AND n.nspname='public') s
+            JOIN pg_attribute att ON att.attrelid=s.conrelid AND att.attnum=s.conkey[s.i]
+            JOIN pg_constraint c ON c.conrelid=s.conrelid
+            GROUP BY c.conrelid
+          ),
+          fks AS (
+            SELECT c.conrelid AS table_oid,
+                   jsonb_agg(jsonb_build_object(
+                     'constraint_name', c.conname,
+                     'columns', fk_cols.cols,
+                     'ref_schema', ref_n.nspname,
+                     'ref_table', ref_cl.relname,
+                     'ref_columns', ref_cols.cols,
+                     'on_update', c.confupdtype::text,
+                     'on_delete', c.confdeltype::text
+                   )) AS foreign_keys
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid=c.conrelid
+            JOIN pg_namespace n ON n.oid=cl.relnamespace
+            JOIN pg_class ref_cl ON ref_cl.oid=c.confrelid
+            JOIN pg_namespace ref_n ON ref_n.oid=ref_cl.relnamespace
+            LEFT JOIN LATERAL (
+              SELECT jsonb_agg(att.attname ORDER BY i) AS cols
+              FROM (SELECT generate_subscripts(c.conkey,1) i) x
+              JOIN pg_attribute att ON att.attrelid=c.conrelid AND att.attnum=c.conkey[x.i]
+            ) fk_cols ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT jsonb_agg(att.attname ORDER BY i) AS cols
+              FROM (SELECT generate_subscripts(c.confkey,1) i) x
+              JOIN pg_attribute att ON att.attrelid=c.confrelid AND att.attnum=c.confkey[x.i]
+            ) ref_cols ON TRUE
+            WHERE c.contype='f' AND n.nspname='public'
+            GROUP BY c.conrelid
+          ),
+          idx AS (
+            SELECT t.oid AS table_oid,
+                   jsonb_agg(jsonb_build_object('name', i.indexname, 'definition', i.indexdef) ORDER BY i.indexname) AS indexes
+            FROM pg_class t
+            JOIN pg_namespace n ON n.oid=t.relnamespace
+            JOIN pg_indexes i ON i.tablename=t.relname AND i.schemaname=n.nspname
+            WHERE n.nspname='public' AND t.relkind='r'
+            GROUP BY t.oid
+          ),
+          tables_full AS (
+            SELECT tables.table_name, tables.columns,
+                   COALESCE(pks.pk_columns,'[]'::jsonb) AS primary_key,
+                   COALESCE(fks.foreign_keys,'[]'::jsonb) AS foreign_keys,
+                   COALESCE(idx.indexes,'[]'::jsonb) AS indexes
+            FROM tables
+            LEFT JOIN pks ON pks.table_oid=tables.table_oid
+            LEFT JOIN fks ON fks.table_oid=tables.table_oid
+            LEFT JOIN idx ON idx.table_oid=tables.table_oid
+          ),
+          views AS (
+            SELECT c.relname AS view_name,
+                   CASE WHEN c.relkind='m' THEN 'MATERIALIZED' ELSE 'VIEW' END AS kind,
+                   pg_get_viewdef(c.oid, TRUE) AS definition
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='public' AND c.relkind IN ('v','m')
+          )
+          SELECT jsonb_build_object(
+            'tables', COALESCE((SELECT jsonb_agg(to_jsonb(tables_full) ORDER BY tables_full.table_name) FROM tables_full),'[]'::jsonb),
+            'views', COALESCE((SELECT jsonb_agg(jsonb_build_object('view_name',view_name,'definition',definition) ORDER BY view_name) FROM views),'[]'::jsonb)
+          ) AS manifest;
+          SQL
+          psql "$DBV4" -t -A -F '' -f export_manifest.sql | jq -S '.' > manifest_live.json
+
+      - name: Normalize repo manifest
+        run: jq -S '.' schema/manifest.json > manifest_repo.json
+
+      - name: Diff manifests
+        run: |
+          set +e
+          diff -u manifest_repo.json manifest_live.json > manifest.diff || true
+          if [ -s manifest.diff ]; then
+            echo 'Schema manifest drift detected:'
+            cat manifest.diff
+            exit 1
+          fi
+
+      - name: Dump live schema.sql
+        run: |
+          pg_dump --schema=public --schema-only --no-owner --no-privileges "$DBV4" > schema_live.sql
+
+      - name: Diff schema.sql
+        run: |
+          set +e
+          diff -u schema/schema.sql schema_live.sql > schema_sql.diff || true
+          if [ -s schema_sql.diff ]; then
+            echo 'schema.sql drift detected:'
+            cat schema_sql.diff
+            exit 1
+          fi
+
+      - name: Upload diffs (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-drift-diffs
+          path: |
+            manifest.diff
+            schema_sql.diff

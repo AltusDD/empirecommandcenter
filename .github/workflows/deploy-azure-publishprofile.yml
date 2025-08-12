@@ -1,38 +1,25 @@
-name: Deploy (Azure Functions — Publish Profile, auto-detect)
+name: Deploy (Azure Functions — Publish Profile, Build)
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
-env:
-  FUNCTION_APP_NAME: empirecommandcenter-altus
+permissions:
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Find Azure Functions project folder
-        id: find
-        run: |
-          set -e
-          for d in "." "api" "functions" "backend" ; do
-            if [ -f "$d/host.json" ]; then
-              echo "Found host.json in $d"
-              echo "pkg=$d" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          done
-          echo "::error::No host.json found at repo root or in api/, functions/, backend/. Tell me where it is or move it."
-          exit 1
-
-      - name: Deploy with publish profile (remote build + .funcignore)
+      - name: Deploy to Azure Functions (Publish Profile, with Oryx build)
         uses: Azure/functions-action@v1
         with:
-          app-name: ${{ env.FUNCTION_APP_NAME }}
-          package: ${{ steps.find.outputs.pkg }}
+          app-name: empirecommandcenter-altus
+          package: .
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
           respect-funcignore: true
           remote-build: true
+          enable-oryx-build: true
+          scm-do-build-during-deployment: true

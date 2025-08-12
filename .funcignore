@@ -1,6 +1,3 @@
-# Azure Functions (Python) - recommended .funcignore
-# Keep source code; ignore only build artifacts and local envs.
-
 __pycache__/
 .venv/
 .env

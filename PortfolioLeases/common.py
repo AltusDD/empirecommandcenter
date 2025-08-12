@@ -1,8 +1,8 @@
 import azure.functions as func
-import json
-from shared.supa import rest_get
+import json, os
+from shared.supa import rest_get, ECC_CACHE_SECONDS, ECC_DEBUG
 
-def normalize_params(req: func.HttpRequest):
+def normalize(req: func.HttpRequest):
     params = {}
     for k in req.params:
         params[k] = req.params.get(k)
@@ -10,25 +10,25 @@ def normalize_params(req: func.HttpRequest):
     if "offset" not in params: params["offset"] = "0"
     return params
 
-def handle(resource: str, req: func.HttpRequest) -> func.HttpResponse:
-    params = normalize_params(req)
-    res = rest_get(resource, params)
-    status = res.get("status", 500)
-    # Success -> return JSON data only
+def respond_ok(data):
+    body = json.dumps(data)
+    return func.HttpResponse(body, status_code=200, mimetype="application/json",
+                             headers={"Cache-Control": f"public, max-age={ECC_CACHE_SECONDS}",
+                                      "X-ECC-Debug": "1" if ECC_DEBUG else "0"})
+
+def respond_err(res):
+    payload = {"error": "upstream_error", "status": res.get("status")}
+    if ECC_DEBUG:
+        # Include helpful context only when DEBUG on
+        for k in ("url","params","content_type","content_range","text_snippet","error"):
+            v = res.get(k)
+            if v is not None: payload[k] = v
+    body = json.dumps(payload)
+    return func.HttpResponse(body, status_code=res.get("status", 500), mimetype="application/json",
+                             headers={"Cache-Control":"no-store","X-ECC-Debug": "1" if ECC_DEBUG else "0"})
+
+def handle(view_name: str, req: func.HttpRequest) -> func.HttpResponse:
+    res = rest_get(view_name, normalize(req))
     if res.get("ok") and isinstance(res.get("data"), (list, dict)):
-        body = json.dumps(res["data"])
-        return func.HttpResponse(body, status_code=200, mimetype="application/json")
-    # Otherwise return a debug payload (redacts key by not including headers)
-    debug = {
-        "error": "supabase_request_failed",
-        "resource": resource,
-        "status": status,
-        "url": res.get("url"),
-        "params": res.get("params"),
-        "content_type": res.get("content_type"),
-        "content_range": res.get("content_range"),
-        "data_type": type(res.get("data")).__name__ if res.get("data") is not None else None,
-        "text_snippet": res.get("text_snippet"),
-        "exception": res.get("error")
-    }
-    return func.HttpResponse(json.dumps(debug), status_code=status or 500, mimetype="application/json")
+        return respond_ok(res["data"])
+    return respond_err(res)

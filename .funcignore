@@ -1,4 +1,4 @@
-# Keep Azure Functions essentials
+# Keep Functions essentials
 !host.json
 !/**/function.json
 
@@ -8,23 +8,3 @@ dist/
 build/
 coverage/
 *.log
-npm-debug.log*
-yarn-error.log
-
-# Repo / CI / editor noise
-.git/
-.github/
-.vscode/
-.idea/
-*.md
-tests/
-__tests__/
-docs/
-scripts/
-
-# Archives & binaries
-*.zip
-*.tar
-*.gz
-*.7z
-*.exe

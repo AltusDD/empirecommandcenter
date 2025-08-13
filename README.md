@@ -1,13 +1,16 @@
-# ECC Portfolio API (Python) — Production
-- GET /api/portfolio/properties  -> property_occupancy_v
-- GET /api/portfolio/units       -> units_v
-- GET /api/portfolio/leases      -> leases_enriched_v
-- GET /api/_audit/diag           -> quick connectivity test
+# Altus Empire Dropbox Rollout — Implementation Pack
 
-## App settings (Azure → Function App → Configuration)
-- SUPABASE_URL = https://<your-project>.supabase.co
-- SUPABASE_SERVICE_ROLE_KEY = <service role key>
-- ECC_CACHE_SECONDS = 60       # optional
-- ECC_DEBUG = false            # set true to include helpful debug fields in errors
+## Quick start
+1) Run the builder:
+   ```bash
+   python build_altus_pack_fixed.py
+   ```
+2) Upload `altus_dropbox_pack.zip` to Replit (Create Repl → Import from ZIP),
+   or push the `altus_dropbox_pack/` folder to GitHub.
+3) In Supabase, run `db/migrations/001_init.sql` (edit `YOUR_FUNCTION_HOST`).
+4) In Azure Function App, set app settings for `DROPBOX_*`, `SUPABASE_*`, and `AzureWebJobsStorage`.
 
-Deploy with Oryx build enabled so requirements are installed.
+**Endpoints**
+- `POST /api/dropbox_provision_folders`
+- `POST /api/upload`
+- `GET  /api/get_temp_link?id=<asset_id>`

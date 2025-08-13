@@ -1,0 +1,4 @@
+Theme unify + menu cleanup
+- Import "@/styles/theme.css" at the app root (layout or index).
+- Wrap page contents in <div class="emp-card"> ... </div> consistently.
+- Remove duplicate/legacy menu items; only keep /portfolio/properties, /portfolio/units, /portfolio/leases, /tenants, /owners.

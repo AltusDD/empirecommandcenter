@@ -1,0 +1,12 @@
+Update Properties, Units, Leases pages to use /lib/api.
+- Properties -> GET "/portfolio/properties?limit=25"
+  Expect fields: property_id, property_name, total_units, occupied_units, occupancy_pct
+- Units -> GET "/portfolio/units?limit=25"
+  Expect fields: id, property_id, unit_name or unit_number, occupancy_status (or compute from active)
+- Leases -> GET "/portfolio/leases?limit=25&order=start_date.desc,id.asc"
+  Expect fields: lease_id, lease_status, start_date, end_date, property_name, unit_name
+Add guards on every table:
+  - if loading -> show loading state
+  - if error -> show .emp-card error with code/message
+  - if 0 rows -> show empty-state
+Do NOT assume data.items; map the array directly.

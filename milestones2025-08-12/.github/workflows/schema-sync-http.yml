@@ -1,0 +1,27 @@
+name: Schema Sync (HTTP direct commit, safe)
+on: { workflow_dispatch: {} }
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch manifest via RPC
+        run: |
+          set -euo pipefail
+          [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || { echo "::error::Missing Supabase secrets"; exit 1; }
+          RPC="$SUPABASE_URL/rest/v1/rpc/export_schema_manifest"
+          curl -sS -X POST "$RPC" -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" -H "Content-Type: application/json" -d '{"schema_name":"public"}' | jq '.' > schema/manifest.json
+      - name: Commit
+        run: |
+          if git diff --quiet -- schema/manifest.json; then
+            echo "No schema changes."; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add schema/manifest.json
+          git commit -m "chore(schema): sync manifest.json"
+          git push origin HEAD:main

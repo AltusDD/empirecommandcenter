@@ -1,0 +1,28 @@
+name: Schema Drift (Strict, HTTP safe)
+on: { workflow_dispatch: {} }
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get live manifest
+        run: |
+          set -euo pipefail
+          [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || { echo "::error::Missing Supabase secrets"; exit 1; }
+          RPC="$SUPABASE_URL/rest/v1/rpc/export_schema_manifest"
+          curl -sS -X POST "$RPC" -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" -H "Content-Type: application/json" -d '{"schema_name":"public"}' > manifest_live.json
+      - name: Normalize and diff
+        run: |
+          norm='del(.generated_at)
+            | .tables    |= ( . // [] | sort_by(.table_name) )
+            | .views     |= ( . // [] | sort_by(.view_name) )
+            | .functions |= ( . // [] | sort_by(.name) )
+            | .triggers  |= ( . // [] | sort_by(.trigger_name) )
+            | .enums     |= ( . // [] | sort_by(.enum_name) )
+            | .sequences |= ( . // [] | sort_by(.sequence_name) )'
+          jq -S "$norm" schema/manifest.json  > repo.json
+          jq -S "$norm" manifest_live.json   > live.json
+          diff -u repo.json live.json || (echo "::error::Schema drift detected"; exit 1)

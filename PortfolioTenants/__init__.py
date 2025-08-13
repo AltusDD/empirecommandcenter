@@ -14,24 +14,26 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             logging.error("SUPABASE_URL not configured")
             return func.HttpResponse(json.dumps({"error":"SUPABASE_URL not configured"}), status_code=500, mimetype='application/json')
 
-        base_url = f"{supabase_url}/rest/v1/tenants_list_v"
+        base_url = "%s/rest/v1/tenants_list_v" % supabase_url
         params, meta = build_paging_sort_search(req.params, default_sort=DEFAULT_SORT, allowed_sorts=ALLOWED_SORTS, search_columns=SEARCH_COLUMNS)
         headers = supabase_headers(req.headers.get('Authorization'))
 
         r = requests.get(base_url, headers=headers, params=params, timeout=30)
 
         if r.status_code not in (200, 206):
-            logging.error(f"Supabase request failed: {r.status_code} {r.text}")
+            logging.error("Supabase request failed: %s %s", r.status_code, r.text)
             return func.HttpResponse(r.text, status_code=r.status_code, mimetype='application/json')
 
         total = parse_total_from_content_range(r.headers.get('Content-Range'))
-        body  = {"items": r.json() if r.text else [], "total": total, **meta, "source":"azure"}
+        body  = {"items": r.json() if r.text else [], "total": total, "source":"azure"}
+        body.update(meta)
 
+        # Backward-compatible header merge
         h = {'Content-Type':'application/json; charset=utf-8'}
         h.update(cache_headers(CACHE_SECONDS))
 
         return func.HttpResponse(json.dumps(body), status_code=200, headers=h)
 
-    except Exception as e:
+    except Exception:
         logging.exception("/portfolio/tenants failed unexpectedly.")
-        return func.HttpResponse(json.dumps({"error": "An internal server error occurred."}), status_code=500, mimetype='application/json')
+        return func.HttpResponse(json.dumps({"error": "internal_server_error"}), status_code=500, mimetype='application/json')

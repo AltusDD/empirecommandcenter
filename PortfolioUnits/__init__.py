@@ -2,9 +2,10 @@
 import os, json, logging, requests, azure.functions as func
 from shared.postgrest_utils import build_paging_sort_search, parse_total_from_content_range, supabase_headers, cache_headers
 
-ALLOWED_SORTS   = ['unit_name', 'property_name', 'bedrooms', 'bathrooms', 'rent', 'updated_at', 'created_at']
-SEARCH_COLUMNS  = ['unit_name', 'property_name']
-DEFAULT_SORT    = "unit_name"
+# Safer sorts for unit_property_bridge_v (unit column names vary by source)
+ALLOWED_SORTS   = ["property_name","unit","unit_number","name","bedrooms","bathrooms","rent","updated_at","created_at"]
+SEARCH_COLUMNS  = ["unit","unit_number","name","property_name"]
+DEFAULT_SORT    = "property_name"
 CACHE_SECONDS   = 120
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
@@ -14,21 +15,31 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse(json.dumps({"error":"SUPABASE_URL not configured"}), status_code=500, mimetype='application/json')
 
         base_url = f"{supabase_url}/rest/v1/unit_property_bridge_v"
-        params, meta = build_paging_sort_search(req.params, default_sort=DEFAULT_SORT, allowed_sorts=ALLOWED_SORTS, search_columns=SEARCH_COLUMNS)
+
+        # sanitize / map incoming params
+        q = dict(req.params)
+        # Map common alias used by UI to a safe column
+        alias_map = {"unit_name":"unit", "unitnumber":"unit_number"}
+        if q.get("sort"):
+            q["sort"] = alias_map.get(q["sort"].lower(), q["sort"])
+        if q.get("sort") not in ALLOWED_SORTS:
+            q.pop("sort", None)
+            q.pop("order", None)
+
+        params, meta = build_paging_sort_search(q, default_sort=DEFAULT_SORT, allowed_sorts=ALLOWED_SORTS, search_columns=SEARCH_COLUMNS)
         headers = supabase_headers(req.headers.get('Authorization'))
 
         r = requests.get(base_url, headers=headers, params=params, timeout=30)
 
-        if r.status_code not in (200, 206):
+        if r.status_code not in (200,206):
             logging.error(f"Supabase request failed: {r.status_code} {r.text}")
             return func.HttpResponse(r.text or json.dumps({"error":"Upstream error"}), status_code=r.status_code, mimetype='application/json')
 
         total = parse_total_from_content_range(r.headers.get('Content-Range'))
         body  = {"items": r.json() if r.text else [], "total": total, **meta, "source":"azure"}
-        headers_out = {'Content-Type':'application/json; charset=utf-8'}
-        headers_out.update(cache_headers(CACHE_SECONDS))
-        return func.HttpResponse(json.dumps(body), status_code=200, headers=headers_out)
-
+        h = {'Content-Type':'application/json; charset=utf-8'}
+        h.update(cache_headers(CACHE_SECONDS))
+        return func.HttpResponse(json.dumps(body), status_code=200, headers=h)
     except Exception as e:
-        logging.exception("Function failed")
+        logging.exception("PortfolioUnits failed")
         return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype='application/json')

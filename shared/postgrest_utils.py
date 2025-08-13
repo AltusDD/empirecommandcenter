@@ -1,7 +1,5 @@
 
 import os
-import json
-import logging
 from urllib.parse import quote
 
 DEFAULT_PAGE_SIZE = 50
@@ -13,44 +11,26 @@ def _to_int(val, default):
     except Exception:
         return default
 
-def build_paging_sort_search(query_params, *,
-                              default_sort: str,
-                              allowed_sorts: list,
-                              search_columns: list):
-    limit = min(_to_int(query_params.get('limit'), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE)
+def build_paging_sort_search(query_params, *, default_sort: str, allowed_sorts: list, search_columns: list):
+    limit  = min(_to_int(query_params.get('limit'), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE)
     offset = _to_int(query_params.get('offset'), 0)
 
-    sort = query_params.get('sort', default_sort)
+    sort  = query_params.get('sort', default_sort)
     order = query_params.get('order', 'asc').lower()
     order = 'desc' if order == 'desc' else 'asc'
 
-    sort_cols = [c.strip() for c in sort.split(',') if c.strip()]
-    valid_sorts = [c for c in sort_cols if c in allowed_sorts]
-    if not valid_sorts:
-        valid_sorts = [default_sort]
+    sort_cols   = [c.strip() for c in sort.split(',') if c.strip()]
+    valid_sorts = [c for c in sort_cols if c in allowed_sorts] or [default_sort]
     order_clause = ','.join(f"{c}.{order}" for c in valid_sorts)
 
-    params = {
-        'select': '*',
-        'limit': str(limit),
-        'offset': str(offset),
-        'order': order_clause,
-    }
+    params = {'select': '*', 'limit': str(limit), 'offset': str(offset), 'order': order_clause}
 
     search = query_params.get('search')
     if search:
-        safe_cols = [c for c in search_columns if c in allowed_sorts or c in search_columns]
-        if safe_cols:
-            ilikes = ','.join(f"{c}.ilike.*{search}*" for c in safe_cols)
-            params['or'] = f"({ilikes})"
+        ilikes = ','.join(f"{c}.ilike.*{quote(search)}*" for c in search_columns)
+        params['or'] = f"({ilikes})"
 
-    meta = {
-        'limit': limit,
-        'offset': offset,
-        'sort': ','.join(valid_sorts),
-        'order': order,
-        'search': search or None,
-    }
+    meta = {'limit': limit, 'offset': offset, 'sort': ','.join(valid_sorts), 'order': order, 'search': search or None}
     return params, meta
 
 def parse_total_from_content_range(value: str | None) -> int | None:
@@ -65,17 +45,11 @@ def parse_total_from_content_range(value: str | None) -> int | None:
 def supabase_headers(incoming_auth: str | None):
     anon = os.getenv('SUPABASE_ANON_KEY')
     apikey = anon or os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')
-    headers = {
-        'apikey': apikey,
-        'Accept': 'application/json',
-        'Prefer': 'count=exact'
-    }
+    headers = {'apikey': apikey, 'Accept': 'application/json', 'Prefer': 'count=exact'}
     if incoming_auth:
         headers['Authorization'] = incoming_auth
     return headers
 
 def cache_headers(seconds: int):
     s = max(0, int(seconds))
-    return {
-        'Cache-Control': f'public, max-age={s}, s-maxage={s}, stale-while-revalidate={min(60, s)}'
-    }
+    return {'Cache-Control': f'public, max-age={s}, s-maxage={s}, stale-while-revalidate={min(60, s)}'}

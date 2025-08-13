@@ -1,3 +1,4 @@
+
 import os
 import json
 import logging
@@ -16,10 +17,6 @@ def build_paging_sort_search(query_params, *,
                               default_sort: str,
                               allowed_sorts: list,
                               search_columns: list):
-    """
-    Returns (params_dict, meta) where params_dict are PostgREST query params
-    and meta contains limit, offset, sort, order, search used.
-    """
     limit = min(_to_int(query_params.get('limit'), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE)
     offset = _to_int(query_params.get('offset'), 0)
 
@@ -27,7 +24,6 @@ def build_paging_sort_search(query_params, *,
     order = query_params.get('order', 'asc').lower()
     order = 'desc' if order == 'desc' else 'asc'
 
-    # Validate sort (support comma separated "col1,col2")
     sort_cols = [c.strip() for c in sort.split(',') if c.strip()]
     valid_sorts = [c for c in sort_cols if c in allowed_sorts]
     if not valid_sorts:
@@ -45,7 +41,7 @@ def build_paging_sort_search(query_params, *,
     if search:
         safe_cols = [c for c in search_columns if c in allowed_sorts or c in search_columns]
         if safe_cols:
-            ilikes = ','.join(f"{c}.ilike.*{quote(search)}*" for c in safe_cols)
+            ilikes = ','.join(f"{c}.ilike.*{search}*" for c in safe_cols)
             params['or'] = f"({ilikes})"
 
     meta = {
@@ -58,7 +54,6 @@ def build_paging_sort_search(query_params, *,
     return params, meta
 
 def parse_total_from_content_range(value: str | None) -> int | None:
-    # Expected: items 0-49/123 or */*
     if not value:
         return None
     try:
@@ -68,7 +63,6 @@ def parse_total_from_content_range(value: str | None) -> int | None:
         return None
 
 def supabase_headers(incoming_auth: str | None):
-    """Build headers for Supabase REST with Prefer count."""
     anon = os.getenv('SUPABASE_ANON_KEY')
     apikey = anon or os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')
     headers = {

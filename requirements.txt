@@ -6,3 +6,5 @@ requests-toolbelt
 dropbox
 # Optional; using REST via httpx in code, but you can swap to client usage later
 supabase
+azure-functions
+requests==2.32.3

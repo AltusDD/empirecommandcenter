@@ -15,14 +15,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         base_url = f"{supabase_url}/rest/v1/tenants_list_v"
 
+        # Hard drop any incoming sort/order to avoid PostgREST 400 on unknown columns
         q = dict(req.params)
-        # normalize lease date column names if UI sends lease_start/lease_end
-        alias_map = {"lease_start":"start_date", "lease_end":"end_date"}
-        if q.get("sort"):
-            q["sort"] = alias_map.get(q["sort"].lower(), q["sort"])
-        if q.get("sort") not in ALLOWED_SORTS:
-            q.pop("sort", None)
-            q.pop("order", None)
+        q.pop("sort", None)
+        q.pop("order", None)
 
         params, meta = build_paging_sort_search(q, default_sort=DEFAULT_SORT, allowed_sorts=ALLOWED_SORTS, search_columns=SEARCH_COLUMNS)
         headers = supabase_headers(req.headers.get('Authorization'))

@@ -2,8 +2,7 @@
 import os, json, logging, requests, azure.functions as func
 from shared.postgrest_utils import build_paging_sort_search, parse_total_from_content_range, supabase_headers, cache_headers
 
-# Safer sorts for unit_property_bridge_v (unit column names vary by source)
-ALLOWED_SORTS   = ["property_name","unit","unit_number","name","bedrooms","bathrooms","rent","updated_at","created_at"]
+ALLOWED_SORTS   = ["property_name","unit","unit_number","name","updated_at","created_at"]
 SEARCH_COLUMNS  = ["unit","unit_number","name","property_name"]
 DEFAULT_SORT    = "property_name"
 CACHE_SECONDS   = 120
@@ -16,15 +15,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         base_url = f"{supabase_url}/rest/v1/unit_property_bridge_v"
 
-        # sanitize / map incoming params
+        # Hard drop any incoming sort/order to avoid PostgREST 400
         q = dict(req.params)
-        # Map common alias used by UI to a safe column
-        alias_map = {"unit_name":"unit", "unitnumber":"unit_number"}
-        if q.get("sort"):
-            q["sort"] = alias_map.get(q["sort"].lower(), q["sort"])
-        if q.get("sort") not in ALLOWED_SORTS:
-            q.pop("sort", None)
-            q.pop("order", None)
+        q.pop("sort", None)
+        q.pop("order", None)
 
         params, meta = build_paging_sort_search(q, default_sort=DEFAULT_SORT, allowed_sorts=ALLOWED_SORTS, search_columns=SEARCH_COLUMNS)
         headers = supabase_headers(req.headers.get('Authorization'))

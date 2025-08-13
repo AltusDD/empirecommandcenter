@@ -2,7 +2,6 @@
 import os, json, logging, requests, azure.functions as func
 from shared.postgrest_utils import build_paging_sort_search, parse_total_from_content_range, supabase_headers, cache_headers
 
-# Use column names that exist in leases_enriched_v
 ALLOWED_SORTS   = ["start_date","end_date","rent","tenant_name","property_name","unit_name","status","updated_at","created_at"]
 SEARCH_COLUMNS  = ["tenant_name","property_name","unit_name"]
 DEFAULT_SORT    = "start_date"
@@ -16,14 +15,18 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         base_url = f"{supabase_url}/rest/v1/leases_enriched_v"
 
-        # sanitize incoming params
         q = dict(req.params)
+        alias_map = {"lease_start":"start_date", "lease_end":"end_date"}
+        if q.get("sort"):
+            k = q["sort"].lower()
+            q["sort"] = alias_map.get(k, q["sort"])
         if q.get("sort") not in ALLOWED_SORTS:
             q.pop("sort", None)
             q.pop("order", None)
 
         params, meta = build_paging_sort_search(q, default_sort=DEFAULT_SORT, allowed_sorts=ALLOWED_SORTS, search_columns=SEARCH_COLUMNS)
         headers = supabase_headers(req.headers.get('Authorization'))
+
         r = requests.get(base_url, headers=headers, params=params, timeout=30)
 
         if r.status_code not in (200,206):

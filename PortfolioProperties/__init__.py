@@ -1,39 +1,48 @@
+
+
 import os, json, logging, requests, azure.functions as func
 from shared.postgrest_utils import build_paging_sort_search, parse_total_from_content_range, supabase_headers, cache_headers
 from shared.normalize import normalize_items
 
-ALLOWED_SORTS   = ["property_name", "city", "state", "total_units", "occupied_units", "occupancy_rate", "updated_at", "created_at"]
-SEARCH_COLUMNS  = ["property_name", "address1", "city", "state"]
-DEFAULT_SORT    = "property_name"
-CACHE_SECONDS   = 300
-VIEW_NAME       = "property_occupancy_v"
 
-def main(req: func.HttpRequest) -> func.HttpResponse:
-    try:
-        supabase_url = (os.getenv('SUPABASE_URL') or '').rstrip('/')
-        if not supabase_url:
-            logging.error("SUPABASE_URL not configured")
-            return func.HttpResponse(json.dumps({"error":"SUPABASE_URL not configured"}), status_code=500, mimetype='application/json')
+        ALLOWED_SORTS  = ["property_name", "city", "state", "total_units", "occupied_units", "occupancy_rate", "updated_at", "created_at"]
+        SEARCH_COLUMNS = ["property_name", "city", "state", "address1"]
+        DEFAULT_SORT   = "property_name"
+        CACHE_SECONDS  = 300
 
-        base_url = f"{supabase_url}/rest/v1/{VIEW_NAME}"
-        params, meta = build_paging_sort_search(req.params, default_sort=DEFAULT_SORT, allowed_sorts=ALLOWED_SORTS, search_columns=SEARCH_COLUMNS)
-        headers = supabase_headers(req.headers.get('Authorization'))
+        VIEW = "property_occupancy_v"
 
-        r = requests.get(base_url, headers=headers, params=params, timeout=30)
+        def main(req: func.HttpRequest) -> func.HttpResponse:
+            try:
+                supabase_url = (os.getenv('SUPABASE_URL') or '').rstrip('/')
+                if not supabase_url:
+                    logging.error("SUPABASE_URL not configured")
+                    return func.HttpResponse(json.dumps({"error":"SUPABASE_URL not configured"}), status_code=500, mimetype='application/json')
 
-        if r.status_code not in (200, 206):
-            logging.error(f"Supabase request failed: {r.status_code} {r.text[:300]}")
-            return func.HttpResponse(r.text, status_code=r.status_code, mimetype='application/json')
+                base_url = f"{supabase_url}/rest/v1/{VIEW}"
+                params, meta = build_paging_sort_search(
+                    req.params,
+                    default_sort=DEFAULT_SORT,
+                    allowed_sorts=ALLOWED_SORTS,
+                    search_columns=SEARCH_COLUMNS
+                )
+                headers = supabase_headers(req.headers.get('Authorization'))
 
-        total = parse_total_from_content_range(r.headers.get('Content-Range'))
-        items = r.json() if r.text else []
-        items = normalize_items("properties", items)
+                r = requests.get(base_url, headers=headers, params=params, timeout=30)
 
-        body  = {"items": items, "total": total, **meta, "source":"azure"}
-        h = {'Content-Type':'application/json; charset=utf-8'}
-        h.update(cache_headers(CACHE_SECONDS))
-        return func.HttpResponse(json.dumps(body), status_code=200, headers=h)
+                if r.status_code not in (200, 206):
+                    logging.error(f"Supabase request failed: {r.status_code} {r.text}")
+                    return func.HttpResponse(r.text, status_code=r.status_code, mimetype='application/json')
 
-    except Exception as e:
-        logging.exception("/portfolio/properties failed")
-        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype='application/json')
+                items = r.json() if r.text else []
+                items = normalize_items("properties", items)
+                total = parse_total_from_content_range(r.headers.get('Content-Range'))
+
+                body  = {"items": items, "total": total, **meta, "source":"azure"}
+                h = {'Content-Type':'application/json; charset=utf-8'}
+                h.update(cache_headers(CACHE_SECONDS))
+                return func.HttpResponse(json.dumps(body), status_code=200, headers=h)
+
+            except Exception as e:
+                logging.exception("/portfolio/properties failed")
+                return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype='application/json')

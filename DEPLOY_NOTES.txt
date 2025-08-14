@@ -1,0 +1,34 @@
+
+ECC — Global Label Reconciliation Patch (Azure Functions)
+
+WHAT THIS ZIP CONTAINS
+----------------------
+• shared/normalize.py  → NEW helper that standardizes field names across all endpoints
+• PortfolioProperties/__init__.py → updated to call normalize_items("properties")
+• PortfolioUnits/__init__.py      → updated to call normalize_items("units")
+• PortfolioLeases/__init__.py     → updated to call normalize_items("leases")
+• PortfolioTenants/__init__.py    → updated to call normalize_items("tenants")
+• PortfolioOwners/__init__.py     → updated to call normalize_items("owners")
+
+HOW TO APPLY
+------------
+1) Download and unzip at the REPO ROOT (same level as host.json).
+   This will overwrite those five __init__.py files and add shared/normalize.py.
+
+2) Commit & push to main.
+
+3) GitHub → Actions → run "Azure Functions — Publish Profile, Build".
+   When it finishes, Azure Portal → your Function App → Restart (optional but safe).
+
+4) Verify in a browser (expect JSON with canonical keys):
+   /api/portfolio/properties?limit=1
+   /api/portfolio/units?limit=1
+   /api/portfolio/leases?limit=1
+   /api/portfolio/tenants?limit=1
+   /api/portfolio/owners?limit=1
+
+NOTES
+-----
+• This patch does NOT change function.json route bindings.
+• Cache-Control added per endpoint: properties 300s, units 120s, leases 60s, tenants 120s, owners 120s.
+• No Python 3.9+ dict union operators are used; works on 3.8+.

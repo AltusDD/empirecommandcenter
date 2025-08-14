@@ -1,43 +1,40 @@
-
 import os, json, logging, requests, azure.functions as func
 from shared.postgrest_utils import build_paging_sort_search, parse_total_from_content_range, supabase_headers, cache_headers
+from shared.normalize import normalize_items
 
-ALLOWED_SORTS   = ["start_date","end_date","rent","tenant_name","property_name","unit_name","status","updated_at","created_at"]
-SEARCH_COLUMNS  = ["tenant_name","property_name","unit_name"]
+ALLOWED_SORTS   = ["start_date", "end_date", "rent_cents", "property_name", "unit_name", "tenant_name", "lease_status", "updated_at", "created_at"]
+SEARCH_COLUMNS  = ["tenant_name", "property_name", "unit_name"]
 DEFAULT_SORT    = "start_date"
 CACHE_SECONDS   = 60
+VIEW_NAME       = "leases_enriched_v"
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         supabase_url = (os.getenv('SUPABASE_URL') or '').rstrip('/')
         if not supabase_url:
+            logging.error("SUPABASE_URL not configured")
             return func.HttpResponse(json.dumps({"error":"SUPABASE_URL not configured"}), status_code=500, mimetype='application/json')
 
-        base_url = f"{supabase_url}/rest/v1/leases_enriched_v"
-
-        q = dict(req.params)
-        alias_map = {"lease_start":"start_date", "lease_end":"end_date"}
-        if q.get("sort"):
-            k = q["sort"].lower()
-            q["sort"] = alias_map.get(k, q["sort"])
-        if q.get("sort") not in ALLOWED_SORTS:
-            q.pop("sort", None)
-            q.pop("order", None)
-
-        params, meta = build_paging_sort_search(q, default_sort=DEFAULT_SORT, allowed_sorts=ALLOWED_SORTS, search_columns=SEARCH_COLUMNS)
+        base_url = f"{supabase_url}/rest/v1/{VIEW_NAME}"
+        params, meta = build_paging_sort_search(req.params, default_sort=DEFAULT_SORT, allowed_sorts=ALLOWED_SORTS, search_columns=SEARCH_COLUMNS)
         headers = supabase_headers(req.headers.get('Authorization'))
 
         r = requests.get(base_url, headers=headers, params=params, timeout=30)
 
-        if r.status_code not in (200,206):
-            logging.error(f"Supabase request failed: {r.status_code} {r.text}")
-            return func.HttpResponse(r.text or json.dumps({"error":"Upstream error"}), status_code=r.status_code, mimetype='application/json')
+        # Pass through RLS errors
+        if r.status_code not in (200, 206):
+            logging.error(f"Supabase request failed: {r.status_code} {r.text[:300]}")
+            return func.HttpResponse(r.text, status_code=r.status_code, mimetype='application/json')
 
         total = parse_total_from_content_range(r.headers.get('Content-Range'))
-        body  = {"items": r.json() if r.text else [], "total": total, **meta, "source":"azure"}
+        items = r.json() if r.text else []
+        items = normalize_items("leases", items)
+
+        body  = {"items": items, "total": total, **meta, "source":"azure"}
         h = {'Content-Type':'application/json; charset=utf-8'}
         h.update(cache_headers(CACHE_SECONDS))
         return func.HttpResponse(json.dumps(body), status_code=200, headers=h)
+
     except Exception as e:
-        logging.exception("PortfolioLeases failed")
+        logging.exception("/portfolio/leases failed")
         return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype='application/json')

@@ -1,10 +1,15 @@
+ECC – Canonical Labels (Backend)
 
-ECC Azure Hotfix: Ignore bad sort for Units/Tenants + safe sort for Leases
-
-Copy the files over your backend repo:
+Drop these into your Azure Functions repo (root level):
+- shared/normalize.py
+- PortfolioProperties/__init__.py
 - PortfolioUnits/__init__.py
-- PortfolioTenants/__init__.py
 - PortfolioLeases/__init__.py
+- PortfolioTenants/__init__.py
+- PortfolioOwners/__init__.py
 
-Then commit, deploy via GitHub Actions (Azure Functions publish), and restart the Function App.
-This guarantees Units and Tenants won't 400 due to unknown order-by columns.
+Then:
+1) Commit & push to main
+2) GitHub → Actions → Azure Functions deploy
+3) Azure portal → Function App → Restart
+4) Test: /api/portfolio/{properties|units|leases|tenants|owners}?limit=1

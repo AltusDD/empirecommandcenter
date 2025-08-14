@@ -1,8 +1,5 @@
 # shared/normalize.py
-# Global label reconciliation so every endpoint returns canonical keys.
-# Safe to drop-in; does not remove original keys, only adds canonical ones.
-
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 def _coalesce(*vals):
     for v in vals:
@@ -11,37 +8,18 @@ def _coalesce(*vals):
     return None
 
 def normalize_items(resource: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Add canonical keys to every row coming from Supabase views so the frontend
-    can rely on one schema regardless of source column names.
-
-    Canonical keys produced:
-      PROPERTIES:
-        property_id, property_name, address1, city, state,
-        total_units, occupied_units, occupancy_rate
-      UNITS:
-        unit_id, unit_name, property_id, property_name, address1, city, state, status
-      LEASES:
-        lease_id, start_date, end_date, rent_cents, lease_status,
-        property_id, property_name, unit_id, unit_name, tenant_name
-      TENANTS:
-        tenant_name, property_id, property_name, unit_id, unit_name,
-        start_date, end_date, lease_status, city, state
-      OWNERS:
-        owner_name, properties_count, units_count, occupied_units, occupancy_rate
-    """
     if not isinstance(items, list):
         return items
 
-    canon = []
+    out_rows = []
     r = (resource or "").lower()
 
     for row in items:
         if not isinstance(row, dict):
-            canon.append(row)
+            out_rows.append(row)
             continue
 
-        out = dict(row)  # keep original keys too
+        out = dict(row)
 
         if r == "properties":
             out["property_id"]    = _coalesce(row.get("property_id"), row.get("id"))
@@ -59,7 +37,7 @@ def normalize_items(resource: str, items: List[Dict[str, Any]]) -> List[Dict[str
 
         elif r == "units":
             out["unit_id"]        = _coalesce(row.get("unit_id"), row.get("id"))
-            out["unit_name"]      = _coalesce(row.get("unit_name"), row.get("unit_number"), "-")
+            out["unit_name"]      = _coalesce(row.get("unit_name"), row.get("unit_number"), row.get("name"), "-")
             out["status"]         = row.get("status")
             out["property_id"]    = _coalesce(row.get("property_id"), row.get("pid"))
             out["address1"]       = _coalesce(row.get("address1"), row.get("address_street1"))
@@ -106,6 +84,6 @@ def normalize_items(resource: str, items: List[Dict[str, Any]]) -> List[Dict[str
                 ou = out.get("occupied_units") or 0
                 out["occupancy_rate"] = (ou / tu) if tu else 0.0
 
-        canon.append(out)
+        out_rows.append(out)
 
-    return canon
+    return out_rows

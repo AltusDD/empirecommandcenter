@@ -21,7 +21,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         r = requests.get(base_url, headers=headers, params=params, timeout=30)
 
-        # Pass through RLS errors
         if r.status_code not in (200, 206):
             logging.error(f"Supabase request failed: {r.status_code} {r.text[:300]}")
             return func.HttpResponse(r.text, status_code=r.status_code, mimetype='application/json')

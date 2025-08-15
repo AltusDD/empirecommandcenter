@@ -15,38 +15,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install clients
+      - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client dnsutils
+          sudo apt-get install -y jq curl
 
-      - name: Build IPv4 DSN
+      - name: Fetch audit views via REST
         env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${SUPABASE_DB_URL:-}" ]; then
-            echo "Missing SUPABASE_DB_URL secret" >&2
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY secrets" >&2
             exit 1
           fi
-          host=$(python3 -c "import os,re; dsn=os.environ['SUPABASE_DB_URL']; m=re.search(r'@([^:/?]+)', dsn); print(m.group(1) if m else '', end='')")
-          if [ -z "$host" ]; then echo "Could not parse host"; exit 1; fi
-          ipv4=$(getent ahostsv4 "$host" | awk '{print $1; exit}') || true
-          if [ -z "$ipv4" ]; then ipv4=$(dig +short A "$host" | head -n1); fi
-          if [ -z "$ipv4" ]; then echo "Could not resolve IPv4"; exit 1; fi
-          if [[ "$SUPABASE_DB_URL" == *\?* ]]; then sep="&"; else sep="?"; fi
-          echo "CONN_V4=${SUPABASE_DB_URL}${sep}hostaddr=${ipv4}&sslmode=require&connect_timeout=10" >> $GITHUB_ENV
 
-      - name: Run verify_all_v2.sql (IPv4)
-        env:
-          CONN_V4: ${{ env.CONN_V4 }}
-        run: |
           echo "## DB Audit Results" >> $GITHUB_STEP_SUMMARY
-          psql "$CONN_V4" -v "ON_ERROR_STOP=1" -f sql/verify_all_v2.sql | tee audit_output.txt
-          {
-            echo ""
-            echo "### Raw Output"
-            echo '```'
-            cat audit_output.txt
-            echo '```'
-          } >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          COUNTS_JSON=$(curl -sS \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            "${SUPABASE_URL}/rest/v1/audit_counts_v?select=*")
+          echo "### Raw vs Normalized (all entities)" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo "$COUNTS_JSON" | jq . >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          FK_JSON=$(curl -sS \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            "${SUPABASE_URL}/rest/v1/audit_fk_v?select=*")
+          echo "### FK Integrity Checks" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo "$FK_JSON" | jq . >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

@@ -1,29 +1,37 @@
-name: Nightly — DB Audit
+- name: Install psql + dns utils
+  run: |
+    sudo apt-get update
+    sudo apt-get install -y postgresql-client dnsutils
 
-on:
-  schedule:
-    - cron: '23 3 * * *'
-  workflow_dispatch:
+- name: Build IPv4 DSN
+  id: dsn
+  env:
+    SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  shell: bash
+  run: |
+    set -euo pipefail
+    HOST=$(python - <<'PY'
+import os, re
+dsn=os.environ["SUPABASE_DB_URL"]
+m=re.search(r'@([^:/?]+)', dsn)
+print(m.group(1) if m else '')
+PY
+)
+    IPV4=$(getent ahostsv4 "$HOST" | awk '{print $1; exit}') || true
+    if [ -z "$IPV4" ]; then IPV4=$(dig +short A "$HOST" | head -n1); fi
+    if [ -z "$IPV4" ]; then echo "No IPv4 for $HOST"; exit 1; fi
+    SEP='?'; [[ "$SUPABASE_DB_URL" == *\?* ]] && SEP='&'
+    echo "CONN_V4=${SUPABASE_DB_URL}${SEP}hostaddr=${IPV4}&sslmode=require&connect_timeout=10" >> $GITHUB_ENV
 
-jobs:
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Install psql
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-      - name: Run verify_all_v2.sql
-        env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        run: |
-          echo "## DB Audit Results" >> $GITHUB_STEP_SUMMARY
-          psql "$SUPABASE_DB_URL" -v "ON_ERROR_STOP=1" -c "\! echo '--- Raw vs Normalized (all entities) ---'"
-          psql "$SUPABASE_DB_URL" -v "ON_ERROR_STOP=1" -f sql/verify_all_v2.sql | tee audit_output.txt
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Raw Output" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          cat audit_output.txt >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+- name: Run verify_all_v2.sql (IPv4)
+  env:
+    CONN_V4: ${{ env.CONN_V4 }}
+  run: |
+    echo "## DB Audit Results" >> $GITHUB_STEP_SUMMARY
+    psql "$CONN_V4" -v "ON_ERROR_STOP=1" -c "\\! echo '--- Raw vs Normalized (all entities) ---'"
+    psql "$CONN_V4" -v "ON_ERROR_STOP=1" -f sql/verify_all_v2.sql | tee audit_output.txt
+    echo "" >> $GITHUB_STEP_SUMMARY
+    echo "### Raw Output" >> $GITHUB_STEP_SUMMARY
+    echo '```' >> $GITHUB_STEP_SUMMARY
+    cat audit_output.txt >> $GITHUB_STEP_SUMMARY
+    echo '```' >> $GITHUB_STEP_SUMMARY

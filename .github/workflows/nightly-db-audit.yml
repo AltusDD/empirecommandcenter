@@ -1,9 +1,9 @@
 name: nightly-db-audit
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: '23 3 * * *'
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,23 +21,15 @@ jobs:
           sudo apt-get install -y postgresql-client dnsutils
 
       - name: Build IPv4 DSN
-        id: build
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        shell: bash
         run: |
           set -euo pipefail
           if [ -z "${SUPABASE_DB_URL:-}" ]; then
             echo "Missing SUPABASE_DB_URL secret" >&2
             exit 1
           fi
-          host=$(python3 - <<'PY'
-import os, re
-dsn=os.environ["SUPABASE_DB_URL"]
-m=re.search(r'@([^:/?]+)', dsn)
-print(m.group(1) if m else "", end="")
-PY
-)
+          host=$(python3 -c "import os,re; dsn=os.environ['SUPABASE_DB_URL']; m=re.search(r'@([^:/?]+)', dsn); print(m.group(1) if m else '', end='')")
           if [ -z "$host" ]; then echo "Could not parse host"; exit 1; fi
           ipv4=$(getent ahostsv4 "$host" | awk '{print $1; exit}') || true
           if [ -z "$ipv4" ]; then ipv4=$(dig +short A "$host" | head -n1); fi

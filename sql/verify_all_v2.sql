@@ -1,4 +1,4 @@
--- verify_all_v2.sql — schema-safe audit for ALL DoorLoop entities (reserved-word safe)
+-- verify_all_v2.sql — schema-safe audit for ALL DoorLoop entities
 -- Copy/paste into Supabase SQL Editor and Run.
 
 -- A) Raw vs Normalized counts
@@ -77,19 +77,19 @@ end$$;
 do $$
 begin
   if exists (select 1 from information_schema.columns where table_schema='public' and table_name='properties' and column_name='zip') then
-    execute $$
+    execute $q$
       select
         sum((zip is null or zip='')::int) as zip_missing,
         count(*) as total
       from properties;
-    $$;
+    $q$;
   elsif exists (select 1 from information_schema.columns where table_schema='public' and table_name='properties' and column_name='address_zip') then
-    execute $$
+    execute $q$
       select
         sum((address_zip is null or address_zip='')::int) as zip_missing,
         count(*) as total
       from properties;
-    $$;
+    $q$;
   else
     raise notice 'No ZIP column on properties (zip/address_zip not found)';
   end if;

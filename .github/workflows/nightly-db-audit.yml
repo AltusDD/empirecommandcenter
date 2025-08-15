@@ -50,4 +50,11 @@ PY
           CONN_V4: ${{ env.CONN_V4 }}
         run: |
           echo "## DB Audit Results" >> $GITHUB_STEP_SUMMARY
-          psql "$CONN_V4"_
+          psql "$CONN_V4" -v "ON_ERROR_STOP=1" -f sql/verify_all_v2.sql | tee audit_output.txt
+          {
+            echo ""
+            echo "### Raw Output"
+            echo '```'
+            cat audit_output.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY

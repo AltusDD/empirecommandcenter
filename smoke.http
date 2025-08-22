@@ -1,0 +1,19 @@
+@base = https://<YOUR_FUNC_APP>.azurewebsites.net/api
+
+### Health
+GET {{base}}/health
+
+### Dynamic properties
+GET {{base}}/portfolio/properties?limit=3
+
+### Dynamic units
+GET {{base}}/portfolio/units?limit=3
+
+### Dynamic leases
+GET {{base}}/portfolio/leases?limit=3
+
+### Dynamic tenants
+GET {{base}}/portfolio/tenants?limit=3
+
+### Dynamic owners
+GET {{base}}/portfolio/owners?limit=3

@@ -22,16 +22,32 @@ def _validate(payload):
             max_tokens = int(max_tokens)
         except Exception:
             raise ValueError("'max_output_tokens' must be an integer.")
-    return msgs, float(temp), max_tokens
+    # Optional per-call model override
+    mdl = payload.get("model")
+    if mdl is not None and not isinstance(mdl, str):
+        raise ValueError("'model' must be a string if provided.")
+    return msgs, float(temp), max_tokens, mdl
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         payload = req.get_json()
-        messages, temperature, max_tokens = _validate(payload)
+        messages, temperature, max_tokens, model_override = _validate(payload)
+
+        corr = req.headers.get("x-correlation-id")
+        if not corr:
+            import uuid
+            corr = str(uuid.uuid4())
+        logger.info("corr_id=%s ai_chat request", corr)
+
         client = FoundryClient()
-        text = client.chat(messages, temperature=temperature, max_output_tokens=max_tokens)
+        text = client.chat(
+            messages,
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            model=model_override
+        )
         return func.HttpResponse(
-            json.dumps({"ok": True, "content": text}),
+            json.dumps({"ok": True, "content": text, "corr_id": corr}),
             mimetype="application/json",
             status_code=200
         )

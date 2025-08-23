@@ -3,12 +3,13 @@
   "Values": {
     "AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=<storage>;AccountKey=<key>;EndpointSuffix=core.windows.net",
     "FUNCTIONS_WORKER_RUNTIME": "python",
-
     "DROPBOX_APP_KEY": "<set-in-azure>",
     "DROPBOX_APP_SECRET": "<set-in-azure>",
     "DROPBOX_REFRESH_TOKEN": "<set-in-azure>",
-
     "SUPABASE_URL": "https://<your-project>.supabase.co",
-    "SUPABASE_SERVICE_ROLE_KEY": "<set-in-azure>"
+    "SUPABASE_SERVICE_ROLE_KEY": "<set-in-azure>",
+    "AZURE_AI_FOUNDRY_ENDPOINT": "https://<your-foundry-project-endpoint>",
+    "AZURE_AI_FOUNDRY_KEY": "<your-foundry-key>",
+    "AZURE_AI_FOUNDRY_MODEL": "gpt-4o-mini"
   }
 }

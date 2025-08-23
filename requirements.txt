@@ -1,12 +1,26 @@
-azure-functions==1.19.0
+Consolidated requirements for the Altus Empire backend
+Azure Functions SDK
+Use the most recent version that is compatible with your Azure Function app.
+The >= operator ensures we get the latest patch/minor versions.
+azure-functions>=1.20.0
+
+Database drivers and clients
 pg8000==1.31.2
-httpx
-python-dotenv
-requests-toolbelt
-# Dropbox SDK
-dropbox
-# Optional; using REST via httpx in code, but you can swap to client usage later
 supabase
-azure-functions
-requests==2.32.3
+httpx
+requests-toolbelt
+
+Azure AI Foundry SDK and its dependencies
+azure-ai-inference>=1.0.0
+azure-core>=1.30.0
+
+For retries with exponential backoff for LLM calls
+tenacity>=8.2.3
+
+Dropbox SDK
+dropbox>=11.36.2
+
+General purpose libraries
+requests>=2.32.3
+python-dotenv
 

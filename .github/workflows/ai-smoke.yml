@@ -1,0 +1,44 @@
+name: AI — Post-Deploy Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "functions/**"
+      - ".github/workflows/ai-smoke.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BASE: ${{ secrets.FUNC_BASE_URL }}
+      CODE: ${{ secrets.FUNC_CODE_DEFAULT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC) — optional
+        if: env.CODE == ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch default host key (when CODE is empty)
+        if: env.CODE == ''
+        id: hostkey
+        run: |
+          APP="${{ secrets.AZURE_FUNCTIONAPP_NAME }}"
+          RG="$(az functionapp show -n "$APP" --query resourceGroup -o tsv)"
+          KEY="$(az functionapp keys list -n "$APP" -g "$RG" --query functionKeys.default -o tsv)"
+          echo "code=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Run AI Probe
+        env:
+          BASE: ${{ env.BASE }}
+          CODE: ${{ steps.hostkey.outputs.code || env.CODE }}
+        run: |
+          bash scripts/post_deploy_smoke.sh

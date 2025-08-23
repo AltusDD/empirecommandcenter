@@ -1,15 +1,15 @@
 import os
 import json
 from typing import List, Dict, Any, Optional
-from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 from azure.core.exceptions import HttpResponseError, ServiceRequestError, ServiceResponseError
 
 from .logging_utils import get_logger
 
 logger = get_logger("altus.ai.client")
 
-# Lazy import to keep cold start small; fallback if SDK missing for any reason
 def _get_sdk_client():
+    """Lazy import to keep cold start small; fall back to HTTP if SDK missing."""
     try:
         from azure.ai.inference import ChatCompletionsClient
         from azure.core.credentials import AzureKeyCredential
@@ -20,9 +20,9 @@ def _get_sdk_client():
 
 class FoundryClient:
     def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None, model: Optional[str] = None):
-        self.endpoint = endpoint or os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT", "").rstrip("/")
+        self.endpoint = (endpoint or os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT", "")).rstrip("/")
         self.key = key or os.environ.get("AZURE_AI_FOUNDRY_KEY")
-        self.model = model or os.environ.get("AZURE_AI_FOUNDRY_MODEL", "gpt-4o-mini")
+        self.default_model = model or os.environ.get("AZURE_AI_FOUNDRY_MODEL", "gpt-4o-mini")
         if not self.endpoint or not self.key:
             raise RuntimeError("Missing Foundry endpoint or key. Set AZURE_AI_FOUNDRY_ENDPOINT and AZURE_AI_FOUNDRY_KEY.")
         self._sdk_client = None
@@ -36,13 +36,21 @@ class FoundryClient:
     @retry(
         reraise=True,
         stop=stop_after_attempt(4),
-        wait=wait_exponential_jitter(initial=0.5, max=6.0),
+        wait=wait_random_exponential(multiplier=0.5, max=6.0),
         retry=retry_if_exception_type((HttpResponseError, ServiceRequestError, ServiceResponseError))
     )
-    def chat(self, messages: List[Dict[str, Any]], temperature: float = 0.2, max_output_tokens: Optional[int] = None) -> str:
+    def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float = 0.2,
+        max_output_tokens: Optional[int] = None,
+        model: Optional[str] = None
+    ) -> str:
         # Basic size guard
         if len(json.dumps(messages)) > 120_000:  # ~120 KB of JSON
             raise ValueError("Prompt too large. Reduce message size.")
+
+        use_model = model or self.default_model
 
         # Prefer SDK
         if self._sdk_client:
@@ -61,12 +69,11 @@ class FoundryClient:
 
             sdk_messages = [to_sdk(m) for m in messages]
             resp = self._sdk_client.complete(
-                model=self.model,
+                model=use_model,
                 messages=sdk_messages,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens
             )
-            # The SDK returns structured content items; text is in the first item typically
             choice = resp.choices[0]
             parts = choice.message.content or []
             text = ""
@@ -84,7 +91,7 @@ class FoundryClient:
             "api-key": self.key
         }
         payload = {
-            "model": self.model,
+            "model": use_model,
             "messages": messages,
             "temperature": temperature
         }
@@ -93,7 +100,6 @@ class FoundryClient:
 
         r = requests.post(url, headers=headers, json=payload, timeout=30)
         if r.status_code == 429:
-            # Let tenacity retry us
             raise HttpResponseError(message="429 Too Many Requests", response=r)
         if r.status_code >= 500:
             raise HttpResponseError(message=f"{r.status_code} Server Error", response=r)

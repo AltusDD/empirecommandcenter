@@ -7,6 +7,9 @@ from shared.logging_utils import get_logger
 
 logger = get_logger("altus.ai.client")
 
+DEFAULT_API_VERSION = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", "2024-10-01-preview")
+FORCE_REST = os.environ.get("AZURE_AI_FOUNDRY_FORCE_REST", "false").lower() == "true"
+
 def _get_sdk_bits():
     try:
         from azure.ai.inference import ChatCompletionsClient
@@ -26,24 +29,32 @@ def _get_aad_token(scope: str) -> Optional[str]:
         logger.error("DefaultAzureCredential failed: %s", e)
         return None
 
+def _append_api_version(endpoint: str, api_version: str) -> str:
+    # Safely append api-version query parameter
+    if "api-version=" in endpoint:
+        return endpoint
+    sep = "&" if "?" in endpoint else "?"
+    return f"{endpoint}{sep}api-version={api_version}"
+
 class FoundryClient:
     def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None, model: Optional[str] = None):
         self.endpoint = (endpoint or os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT", "")).rstrip("/")
         self.key = key or os.environ.get("AZURE_AI_FOUNDRY_KEY")
         self.default_model = model or os.environ.get("AZURE_AI_FOUNDRY_MODEL", "gpt-4o-mini")
         self.auth_mode = (os.environ.get("AZURE_AI_FOUNDRY_AUTH", "key")).lower()
+        self.api_version = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", DEFAULT_API_VERSION)
         if not self.endpoint:
             raise RuntimeError("Missing Foundry endpoint. Set AZURE_AI_FOUNDRY_ENDPOINT.")
-
         self._sdk_client = None
-        self._init_sdk()
+        if not FORCE_REST:
+            self._init_sdk()
 
     def _init_sdk(self):
         ChatCompletionsClient, AzureKeyCredential = _get_sdk_bits()
         if ChatCompletionsClient is None:
             return
+        endpoint_with_ver = _append_api_version(self.endpoint, self.api_version)
         if self.auth_mode == "aad":
-            # Minimal token credential compatible with azure-core
             class _TokenCred:
                 def get_token(self, *scopes, **kwargs):
                     token = _get_aad_token("https://ai.azure.com/.default")
@@ -53,11 +64,11 @@ class FoundryClient:
                     class _T:
                         def __init__(self, t): self.token=t; self.expires_on=int(time.time())+3000
                     return _T(token)
-            self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=_TokenCred())
+            self._sdk_client = ChatCompletionsClient(endpoint=endpoint_with_ver, credential=_TokenCred())
         else:
             if not self.key:
                 raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
-            self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=AzureKeyCredential(self.key))
+            self._sdk_client = ChatCompletionsClient(endpoint=endpoint_with_ver, credential=AzureKeyCredential(self.key))
 
     @retry(
         reraise=True,
@@ -78,8 +89,8 @@ class FoundryClient:
 
         use_model = model or self.default_model
 
-        # Prefer SDK if available
-        if self._sdk_client:
+        # Prefer SDK unless FORCE_REST
+        if self._sdk_client and not FORCE_REST:
             from azure.ai.inference.models import SystemMessage, UserMessage, AssistantMessage, TextContentItem
             def to_sdk(msg):
                 role = msg.get("role")
@@ -94,7 +105,7 @@ class FoundryClient:
                     return UserMessage(content=content)
 
             sdk_messages = [to_sdk(m) for m in messages]
-            # NOTE: azure-ai-inference 1.0.0b9 does not accept 'max_output_tokens'
+            # SDK b9 does not accept max_output_tokens kwarg
             resp = self._sdk_client.complete(
                 model=use_model,
                 messages=sdk_messages,
@@ -109,9 +120,10 @@ class FoundryClient:
                     text += t
             return text.strip()
 
-        # Fallback: raw HTTP
+        # Raw HTTP
         import requests
-        url = f"{self.endpoint}/chat/completions"
+        endpoint_with_ver = _append_api_version(self.endpoint, self.api_version)
+        url = f"{endpoint_with_ver}/chat/completions" if not endpoint_with_ver.endswith("/chat/completions") else endpoint_with_ver
         headers = {"Content-Type": "application/json"}
         if self.auth_mode == "aad":
             token = _get_aad_token("https://ai.azure.com/.default")
@@ -132,6 +144,12 @@ class FoundryClient:
             raise HttpResponseError(message=f"{r.status_code} Unauthorized/Forbidden from Foundry", response=r)
         if r.status_code >= 500:
             raise HttpResponseError(message=f"{r.status_code} Server Error from Foundry", response=r)
+        if r.status_code == 400:
+            # Surface body for API version or schema errors
+            try:
+                raise HttpResponseError(message=r.json(), response=r)
+            except Exception:
+                r.raise_for_status()
         r.raise_for_status()
         data = r.json()
         try:

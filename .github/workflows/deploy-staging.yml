@@ -24,13 +24,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy to Azure Functions (staging)
+      # Ensure Oryx (Kudu) builds requirements.txt into .python_packages on Azure
+      - name: Deploy to Azure Functions (staging) with Oryx build
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
           package: .
+          scm-do-build-during-deployment: true  # trigger Kudu/oryx build on Azure
+          enable-oryx-build: true               # allow oryx to detect Python and install deps
+          respect-funcignore: true
           respect-pom-xml: false
-          respect-funcignore: false
-          scm-do-build-during-deployment: false
-          enable-oryx-build: false
           remote-build: false

@@ -24,7 +24,7 @@ class FoundryClient:
         self.key = key or os.environ.get("AZURE_AI_FOUNDRY_KEY")
         self.default_model = model or os.environ.get("AZURE_AI_FOUNDRY_MODEL", "gpt-4o-mini")
         if not self.endpoint or not self.key:
-            raise RuntimeError("Missing Foundry endpoint or key. Set AZURE_AI_FOUNDRY_ENDPOINT and AZURE_AI_FOUNDRY_KEY.")
+            raise RuntimeError("Missing Foundry endpoint or key. Set AZURE_AI_FOUNDRRY_ENDPOINT and AZURE_AI_FOUNDRY_KEY.")
         self._sdk_client = None
         self._init_sdk()
 
@@ -68,11 +68,12 @@ class FoundryClient:
                     return UserMessage(content=content)
 
             sdk_messages = [to_sdk(m) for m in messages]
+            # IMPORTANT: azure-ai-inference 1.0.0b9 does not accept 'max_output_tokens' as a kwarg.
+            # Omit it here to avoid "Session.request() got an unexpected keyword argument 'max_output_tokens'".
             resp = self._sdk_client.complete(
                 model=use_model,
                 messages=sdk_messages,
-                temperature=temperature,
-                max_output_tokens=max_output_tokens
+                temperature=temperature
             )
             choice = resp.choices[0]
             parts = choice.message.content or []
@@ -95,8 +96,9 @@ class FoundryClient:
             "messages": messages,
             "temperature": temperature
         }
+        # For REST payload, use 'max_tokens' (service-compatible) instead of 'max_output_tokens'.
         if max_output_tokens is not None:
-            payload["max_output_tokens"] = max_output_tokens
+            payload["max_tokens"] = int(max_output_tokens)
 
         r = requests.post(url, headers=headers, json=payload, timeout=30)
         if r.status_code == 429:

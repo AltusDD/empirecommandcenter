@@ -26,7 +26,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -t .python_packages/lib/site-packages --upgrade
-          ls -la .python_packages/lib/site-packages | head -n 50
+          echo "Top of .python_packages:"
+          ls -la .python_packages | sed -n '1,120p'
+          echo "Top of site-packages:"
+          ls -la .python_packages/lib/site-packages | sed -n '1,200p'
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -35,12 +38,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy to Azure Functions (staging) — use prebuilt package
+      - name: Deploy to Azure Functions (staging) — include prebuilt packages
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
           package: .
-          respect-funcignore: true
-          scm-do-build-during-deployment: false   # we already built deps
+          respect-funcignore: false                # DO NOT exclude .python_packages
+          scm-do-build-during-deployment: false    # we already built deps
           enable-oryx-build: false
           remote-build: false

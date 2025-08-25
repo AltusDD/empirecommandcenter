@@ -16,8 +16,8 @@ jobs:
       id-token: write
       contents: read
     env:
-      BASE: ${{ secrets.FUNC_BASE_URL }}          # optional now
-      CODE: ${{ secrets.FUNC_CODE_DEFAULT }}      # optional (will be fetched if empty)
+      BASE: ${{ secrets.FUNC_BASE_URL }}          # optional
+      CODE: ${{ secrets.FUNC_CODE_DEFAULT }}      # optional
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +40,6 @@ jobs:
 
       - name: Fetch default host key (when CODE is empty)
         if: env.CODE == ''
-        id: hostkey
         run: |
           set -euo pipefail
           APP="${{ secrets.AZURE_FUNCTIONAPP_NAME }}"
@@ -58,10 +57,13 @@ jobs:
           if [ -z "$KEY" ]; then
             echo "Could not fetch default host key for $APP in RG $RG"; exit 1
           fi
-          echo "code=$KEY" >> "$GITHUB_OUTPUT"
+          # Make CODE available to subsequent steps
+          echo "CODE=$KEY" >> "$GITHUB_ENV"
+
+      - name: Show derived settings (safe)
+        run: |
+          echo "BASE=$BASE"
+          echo "CODE set: $([[ -n "$CODE" ]] && echo yes || echo no)"
 
       - name: Run AI Probe
-        env:
-          BASE: ${{ env.BASE }}
-          CODE: ${{ steps.hostkey.outputs.code || env.CODE }}
         run: bash scripts/post_deploy_smoke.sh

@@ -16,8 +16,8 @@ jobs:
       id-token: write
       contents: read
     env:
-      BASE: ${{ secrets.FUNC_BASE_URL }}
-      CODE: ${{ secrets.FUNC_CODE_DEFAULT }}
+      BASE: ${{ secrets.FUNC_BASE_URL }}          # optional now
+      CODE: ${{ secrets.FUNC_CODE_DEFAULT }}      # optional (will be fetched if empty)
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +29,15 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Derive BASE if missing
+        if: env.BASE == ''
+        run: |
+          APP="${{ secrets.AZURE_FUNCTIONAPP_NAME }}"
+          if [ -z "$APP" ]; then
+            echo "AZURE_FUNCTIONAPP_NAME secret is missing in the staging environment"; exit 1
+          fi
+          echo "BASE=https://$APP.azurewebsites.net" >> "$GITHUB_ENV"
+
       - name: Fetch default host key (when CODE is empty)
         if: env.CODE == ''
         id: hostkey
@@ -38,7 +47,6 @@ jobs:
           if [ -z "$APP" ]; then
             echo "AZURE_FUNCTIONAPP_NAME is not set in the staging environment secrets"; exit 1
           fi
-          # Robust RG discovery (no -g required)
           RG="$(az functionapp list --query "[?name=='$APP'].resourceGroup" -o tsv)"
           if [ -z "$RG" ]; then
             RG="$(az resource list --name "$APP" --resource-type Microsoft.Web/sites --query [0].resourceGroup -o tsv)"

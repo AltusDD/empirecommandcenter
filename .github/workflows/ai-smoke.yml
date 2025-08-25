@@ -9,8 +9,12 @@ on:
 
 jobs:
   smoke:
+    environment: staging
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      id-token: write        # REQUIRED for OIDC (azure/login@v2)
+      contents: read
     env:
       BASE: ${{ secrets.FUNC_BASE_URL }}
       CODE: ${{ secrets.FUNC_CODE_DEFAULT }}

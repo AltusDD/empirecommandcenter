@@ -1,11 +1,10 @@
 name: AI — Post-Deploy Smoke
-
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
     paths:
-      - "functions/**"
+      - "ai_probe/**"
       - ".github/workflows/ai-smoke.yml"
 
 jobs:
@@ -16,10 +15,9 @@ jobs:
       BASE: ${{ secrets.FUNC_BASE_URL }}
       CODE: ${{ secrets.FUNC_CODE_DEFAULT }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Azure login (OIDC) — optional
+      - name: Azure login (OIDC) — only if CODE not set
         if: env.CODE == ''
         uses: azure/login@v2
         with:
@@ -40,5 +38,4 @@ jobs:
         env:
           BASE: ${{ env.BASE }}
           CODE: ${{ steps.hostkey.outputs.code || env.CODE }}
-        run: |
-          bash scripts/post_deploy_smoke.sh
+        run: bash scripts/post_deploy_smoke.sh

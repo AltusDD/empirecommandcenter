@@ -41,6 +41,7 @@ class FoundryClient:
         self._sdk_client = None
         if not FORCE_REST:
             self._init_sdk()
+        logger.info("Foundry client using auth_mode=%s, force_rest=%s, api_version=%s", self.auth_mode, FORCE_REST, self.api_version)
 
     def _init_sdk(self):
         ChatCompletionsClient, AzureKeyCredential = _get_sdk_bits()
@@ -56,7 +57,6 @@ class FoundryClient:
                     class _T:
                         def __init__(self, t): self.token=t; self.expires_on=int(time.time())+3000
                     return _T(token)
-            # NOTE: pass base endpoint; SDK handles api-version internally
             self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=_TokenCred())
         else:
             if not self.key:
@@ -81,7 +81,6 @@ class FoundryClient:
 
         use_model = model or self.default_model
 
-        # Prefer SDK unless forced to REST
         if self._sdk_client and not FORCE_REST:
             from azure.ai.inference.models import SystemMessage, UserMessage, AssistantMessage, TextContentItem
             def to_sdk(msg):
@@ -97,7 +96,6 @@ class FoundryClient:
                     return UserMessage(content=content)
 
             sdk_messages = [to_sdk(m) for m in messages]
-            # b9 SDK: do not pass max_output_tokens
             resp = self._sdk_client.complete(
                 model=use_model,
                 messages=sdk_messages,
@@ -112,7 +110,7 @@ class FoundryClient:
                     text += t
             return text.strip()
 
-        # Raw HTTP with explicit api-version after path
+        # Raw HTTP
         import requests
         url = f"{self.endpoint}/chat/completions?api-version={self.api_version}"
         headers = {"Content-Type": "application/json"}
@@ -132,7 +130,11 @@ class FoundryClient:
 
         r = requests.post(url, headers=headers, json=body, timeout=30)
         if r.status_code in (401, 403):
-            raise HttpResponseError(message=f"{r.status_code} Unauthorized/Forbidden from Foundry", response=r)
+            try:
+                err = r.json()
+            except Exception:
+                err = r.text
+            raise HttpResponseError(message=f"{r.status_code} from Foundry: {err}", response=r)
         if r.status_code >= 500:
             raise HttpResponseError(message=f"{r.status_code} Server Error from Foundry", response=r)
         if r.status_code == 400:

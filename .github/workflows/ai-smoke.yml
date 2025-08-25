@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      id-token: write        # REQUIRED for OIDC (azure/login@v2)
+      id-token: write
       contents: read
     env:
       BASE: ${{ secrets.FUNC_BASE_URL }}
@@ -33,9 +33,23 @@ jobs:
         if: env.CODE == ''
         id: hostkey
         run: |
+          set -euo pipefail
           APP="${{ secrets.AZURE_FUNCTIONAPP_NAME }}"
-          RG="$(az functionapp show -n "$APP" --query resourceGroup -o tsv)"
+          if [ -z "$APP" ]; then
+            echo "AZURE_FUNCTIONAPP_NAME is not set in the staging environment secrets"; exit 1
+          fi
+          # Robust RG discovery (no -g required)
+          RG="$(az functionapp list --query "[?name=='$APP'].resourceGroup" -o tsv)"
+          if [ -z "$RG" ]; then
+            RG="$(az resource list --name "$APP" --resource-type Microsoft.Web/sites --query [0].resourceGroup -o tsv)"
+          fi
+          if [ -z "$RG" ]; then
+            echo "Could not determine resource group for $APP"; exit 1
+          fi
           KEY="$(az functionapp keys list -n "$APP" -g "$RG" --query functionKeys.default -o tsv)"
+          if [ -z "$KEY" ]; then
+            echo "Could not fetch default host key for $APP in RG $RG"; exit 1
+          fi
           echo "code=$KEY" >> "$GITHUB_OUTPUT"
 
       - name: Run AI Probe

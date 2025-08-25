@@ -1,22 +1,17 @@
-
-name: Deploy (Full Repo Package)
+name: DISABLED — Managed by Altus cleanup
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
-  build-and-deploy:
+  disabled:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Deploy to Azure Functions
-        uses: Azure/functions-action@v1
-        with:
-          app-name: empirecommandcenter-altus
-          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
-          package: .
+      - name: This workflow is intentionally disabled
+        run: |
+          echo "This workflow was disabled to prevent duplicate or incorrect deployments."
+          echo "Re-enable by restoring the original file from git history or by replacing the triggers under 'on:'."

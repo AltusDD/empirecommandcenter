@@ -1,17 +1,17 @@
-name: Deploy (Azure Functions — Publish Profile, Build)
-on: { workflow_dispatch: {} }
-permissions: { contents: read }
+name: DISABLED — Managed by Altus cleanup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
-  deploy:
+  disabled:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Azure/functions-action@v1
-        with:
-          app-name: empirecommandcenter-altus
-          package: .
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
-          respect-funcignore: true
-          remote-build: true
-          enable-oryx-build: true
-          scm-do-build-during-deployment: true
+      - name: This workflow is intentionally disabled
+        run: |
+          echo "This workflow was disabled to prevent duplicate or incorrect deployments."
+          echo "Re-enable by restoring the original file from git history or by replacing the triggers under 'on:'."

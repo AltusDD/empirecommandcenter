@@ -1,35 +1,17 @@
-name: Deploy Dropbox Function
+name: DISABLED — Managed by Altus cleanup
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "api/**"
-      - ".github/workflows/deploy-dropbox-function.yml"
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  deploy:
+  disabled:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-
-      # (Optional) If your Dropbox function is in a subfolder, set it here.
-      # If everything is at the repo root, leave package as "."
-      - name: Set function package path
-        id: pkg
+      - name: This workflow is intentionally disabled
         run: |
-          # CHANGE THIS LINE if your Dropbox function lives in a subfolder.
-          # For example: echo "path=./api" >> $GITHUB_OUTPUT
-          echo "path=." >> $GITHUB_OUTPUT
-
-      - name: Deploy to Azure Functions (Publish Profile)
-        uses: Azure/functions-action@v1
-        with:
-          app-name: empirecommandcenter-altus
-          package: ${{ steps.pkg.outputs.path }}
-          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
-          respect-funcignore: true
-          remote-build: true
-          scm-do-build-during-deployment: false
-          enable-oryx-build: false
+          echo "This workflow was disabled to prevent duplicate or incorrect deployments."
+          echo "Re-enable by restoring the original file from git history or by replacing the triggers under 'on:'."

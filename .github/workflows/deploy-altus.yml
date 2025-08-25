@@ -1,33 +1,17 @@
-name: Deploy Functions — staging
+name: DISABLED — Managed by Altus cleanup
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
-  deploy:
-    environment: staging
+  disabled:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy to Azure Functions (staging)
-        uses: Azure/functions-action@v1
-        with:
-          app-name: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
-          package: .
-          respect-pom-xml: false
-          respect-funcignore: false
-          scm-do-build-during-deployment: false
-          enable-oryx-build: false
-          remote-build: false
+      - name: This workflow is intentionally disabled
+        run: |
+          echo "This workflow was disabled to prevent duplicate or incorrect deployments."
+          echo "Re-enable by restoring the original file from git history or by replacing the triggers under 'on:'."

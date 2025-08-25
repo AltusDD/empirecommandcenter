@@ -17,6 +17,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Python for build (matches Azure runtime)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Prebuild dependencies into .python_packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -t .python_packages/lib/site-packages --upgrade
+          ls -la .python_packages/lib/site-packages | head -n 50
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -24,14 +35,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Ensure Oryx (Kudu) builds requirements.txt into .python_packages on Azure
-      - name: Deploy to Azure Functions (staging) with Oryx build
+      - name: Deploy to Azure Functions (staging) — use prebuilt package
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
           package: .
-          scm-do-build-during-deployment: true  # trigger Kudu/oryx build on Azure
-          enable-oryx-build: true               # allow oryx to detect Python and install deps
           respect-funcignore: true
-          respect-pom-xml: false
+          scm-do-build-during-deployment: false   # we already built deps
+          enable-oryx-build: false
           remote-build: false

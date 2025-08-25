@@ -3,34 +3,60 @@ import json
 from typing import List, Dict, Any, Optional
 from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 from azure.core.exceptions import HttpResponseError, ServiceRequestError, ServiceResponseError
-
 from shared.logging_utils import get_logger
 
 logger = get_logger("altus.ai.client")
 
-def _get_sdk_client():
-    """Lazy import to keep cold start small; fall back to HTTP if SDK missing."""
+def _get_sdk_bits():
     try:
         from azure.ai.inference import ChatCompletionsClient
         from azure.core.credentials import AzureKeyCredential
         return ChatCompletionsClient, AzureKeyCredential
     except Exception as e:
-        logger.warning("Falling back to raw HTTP for Foundry calls: %s", e)
+        logger.warning("SDK not available, will use raw HTTP: %s", e)
         return None, None
+
+def _get_aad_token(scope: str) -> Optional[str]:
+    try:
+        from azure.identity import DefaultAzureCredential
+        cred = DefaultAzureCredential()
+        token = cred.get_token(scope)
+        return token.token
+    except Exception as e:
+        logger.error("DefaultAzureCredential failed: %s", e)
+        return None
 
 class FoundryClient:
     def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None, model: Optional[str] = None):
         self.endpoint = (endpoint or os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT", "")).rstrip("/")
         self.key = key or os.environ.get("AZURE_AI_FOUNDRY_KEY")
         self.default_model = model or os.environ.get("AZURE_AI_FOUNDRY_MODEL", "gpt-4o-mini")
-        if not self.endpoint or not self.key:
-            raise RuntimeError("Missing Foundry endpoint or key. Set AZURE_AI_FOUNDRRY_ENDPOINT and AZURE_AI_FOUNDRY_KEY.")
+        self.auth_mode = (os.environ.get("AZURE_AI_FOUNDRY_AUTH", "key")).lower()
+        if not self.endpoint:
+            raise RuntimeError("Missing Foundry endpoint. Set AZURE_AI_FOUNDRY_ENDPOINT.")
+
         self._sdk_client = None
         self._init_sdk()
 
     def _init_sdk(self):
-        ChatCompletionsClient, AzureKeyCredential = _get_sdk_client()
-        if ChatCompletionsClient:
+        ChatCompletionsClient, AzureKeyCredential = _get_sdk_bits()
+        if ChatCompletionsClient is None:
+            return
+        if self.auth_mode == "aad":
+            # Minimal token credential compatible with azure-core
+            class _TokenCred:
+                def get_token(self, *scopes, **kwargs):
+                    token = _get_aad_token("https://ai.azure.com/.default")
+                    if not token:
+                        raise RuntimeError("Failed to acquire AAD token for https://ai.azure.com/.default")
+                    import time
+                    class _T:
+                        def __init__(self, t): self.token=t; self.expires_on=int(time.time())+3000
+                    return _T(token)
+            self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=_TokenCred())
+        else:
+            if not self.key:
+                raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
             self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=AzureKeyCredential(self.key))
 
     @retry(
@@ -46,13 +72,13 @@ class FoundryClient:
         max_output_tokens: Optional[int] = None,
         model: Optional[str] = None
     ) -> str:
-        # Basic size guard
-        if len(json.dumps(messages)) > 120_000:  # ~120 KB of JSON
+        payload_size = len(json.dumps(messages))
+        if payload_size > 120_000:
             raise ValueError("Prompt too large. Reduce message size.")
 
         use_model = model or self.default_model
 
-        # Prefer SDK
+        # Prefer SDK if available
         if self._sdk_client:
             from azure.ai.inference.models import SystemMessage, UserMessage, AssistantMessage, TextContentItem
             def to_sdk(msg):
@@ -68,15 +94,14 @@ class FoundryClient:
                     return UserMessage(content=content)
 
             sdk_messages = [to_sdk(m) for m in messages]
-            # IMPORTANT: azure-ai-inference 1.0.0b9 does not accept 'max_output_tokens' as a kwarg.
-            # Omit it here to avoid "Session.request() got an unexpected keyword argument 'max_output_tokens'".
+            # NOTE: azure-ai-inference 1.0.0b9 does not accept 'max_output_tokens'
             resp = self._sdk_client.complete(
                 model=use_model,
                 messages=sdk_messages,
                 temperature=temperature
             )
             choice = resp.choices[0]
-            parts = choice.message.content or []
+            parts = getattr(choice.message, "content", None) or []
             text = ""
             for p in parts:
                 t = getattr(p, "text", None)
@@ -87,24 +112,26 @@ class FoundryClient:
         # Fallback: raw HTTP
         import requests
         url = f"{self.endpoint}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": self.key
-        }
-        payload = {
-            "model": use_model,
-            "messages": messages,
-            "temperature": temperature
-        }
-        # For REST payload, use 'max_tokens' (service-compatible) instead of 'max_output_tokens'.
-        if max_output_tokens is not None:
-            payload["max_tokens"] = int(max_output_tokens)
+        headers = {"Content-Type": "application/json"}
+        if self.auth_mode == "aad":
+            token = _get_aad_token("https://ai.azure.com/.default")
+            if not token:
+                raise RuntimeError("Failed to acquire AAD token for https://ai.azure.com/.default")
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            if not self.key:
+                raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
+            headers["api-key"] = self.key
 
-        r = requests.post(url, headers=headers, json=payload, timeout=30)
-        if r.status_code == 429:
-            raise HttpResponseError(message="429 Too Many Requests", response=r)
+        body = {"model": use_model, "messages": messages, "temperature": temperature}
+        if max_output_tokens is not None:
+            body["max_tokens"] = int(max_output_tokens)
+
+        r = requests.post(url, headers=headers, json=body, timeout=30)
+        if r.status_code in (401, 403):
+            raise HttpResponseError(message=f"{r.status_code} Unauthorized/Forbidden from Foundry", response=r)
         if r.status_code >= 500:
-            raise HttpResponseError(message=f"{r.status_code} Server Error", response=r)
+            raise HttpResponseError(message=f"{r.status_code} Server Error from Foundry", response=r)
         r.raise_for_status()
         data = r.json()
         try:

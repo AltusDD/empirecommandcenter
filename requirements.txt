@@ -1,9 +1,10 @@
 # Azure Functions
 azure-functions>=1.20.0
 
-# Azure AI Inference SDK (beta available on PyPI)
+# Azure AI Inference SDK (beta on PyPI)
 azure-ai-inference==1.0.0b9
 azure-core>=1.30.0
+azure-identity>=1.17.0
 
 # HTTP / retries
 requests>=2.32.0

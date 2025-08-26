@@ -37,25 +37,14 @@ def _get_aad_token(scope: str) -> Optional[str]:
     DefaultAzureCredential (avoids picking up local env/CLI creds).
     """
     try:
-        from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
-        try:
-            mi = ManagedIdentityCredential()
-            token = mi.get_token(scope).token
-            return token
-        except Exception as mi_err:
-            logger.warning("ManagedIdentityCredential failed: %s", mi_err)
-            dac = DefaultAzureCredential(
-                exclude_environment_credential=True,
-                exclude_shared_token_cache_credential=True,
-                exclude_visual_studio_code_credential=True,
-                exclude_powers_hell_credential=True,
-                exclude_interactive_browser_credential=True,
-                exclude_cli_credential=True
-            )
-            token = dac.get_token(scope).token
-            return token
+        from azure.identity import ManagedIdentityCredential
+        mi = ManagedIdentityCredential()
+        token = mi.get_token(scope).token
+        return token
     except Exception as e:
-        logger.error("AAD credential acquisition failed: %s", e)
+        logger.error("ManagedIdentityCredential failed: %s", e)
+        # We no longer fall back to DefaultAzureCredential as it seems to cause issues.
+        # We will fail here with a clear error message.
         return None
 
 def _to_sdk_message(msg: Dict[str, Any]):
@@ -126,20 +115,19 @@ class FoundryClient:
             return
 
         if self.auth_mode == "aad":
-            from azure.identity import DefaultAzureCredential
-            credential = DefaultAzureCredential()
+            from azure.identity import ManagedIdentityCredential
             try:
+                credential = ManagedIdentityCredential()
                 # Attempt to get a token immediately to surface AAD issues early
                 token = credential.get_token("https://ai.azure.com/.default")
                 logger.info("Successfully acquired AAD token during client init.")
+                # If token acquisition succeeds, initialize the SDK client
+                self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=credential)
+                logger.info("Initialized SDK client with AAD managed identity.")
             except Exception as e:
                 logger.error("Failed to acquire AAD token during client init: %s", e)
                 self._sdk_client = None
                 return
-            
-            # If token acquisition succeeds, initialize the SDK client
-            self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=credential)
-            logger.info("Initialized SDK client with AAD managed identity.")
         else:
             if not self.key:
                 raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")

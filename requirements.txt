@@ -1,5 +1,5 @@
 azure-functions>=1.23.0
-azure-ai-inference==1.0.0b9
+azure-ai-inference>=1.0.0
 azure-core>=1.30.0
 azure-identity>=1.16.0
 tenacity>=8.2.3

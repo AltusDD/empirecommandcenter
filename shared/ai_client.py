@@ -128,6 +128,16 @@ class FoundryClient:
         if self.auth_mode == "aad":
             from azure.identity import DefaultAzureCredential
             credential = DefaultAzureCredential()
+            try:
+                # Attempt to get a token immediately to surface AAD issues early
+                token = credential.get_token("https://ai.azure.com/.default")
+                logger.info("Successfully acquired AAD token during client init.")
+            except Exception as e:
+                logger.error("Failed to acquire AAD token during client init: %s", e)
+                self._sdk_client = None
+                return
+            
+            # If token acquisition succeeds, initialize the SDK client
             self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=credential)
             logger.info("Initialized SDK client with AAD managed identity.")
         else:
@@ -138,18 +148,15 @@ class FoundryClient:
 
     def _rest_call(self, body: Dict[str, Any], api_version: str) -> Dict[str, Any]:
         import requests
-        from azure.identity import DefaultAzureCredential
         
         url = f"{self.endpoint}/chat/completions?api-version={api_version}"
         headers = {"Content-Type": "application/json"}
         
         if self.auth_mode == "aad":
-            try:
-                cred = DefaultAzureCredential()
-                token = cred.get_token("https://ai.azure.com/.default")
-                headers["Authorization"] = f"Bearer {token.token}"
-            except Exception as e:
-                raise RuntimeError(f"Failed to acquire AAD token: {e}")
+            token = _get_aad_token(AAD_SCOPE)
+            if not token:
+                raise RuntimeError("Failed to acquire AAD token for https://ai.azure.com/.default")
+            headers["Authorization"] = f"Bearer {token}"
         else:
             if not self.key:
                 raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")

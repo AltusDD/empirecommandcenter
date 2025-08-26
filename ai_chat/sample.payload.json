@@ -1,0 +1,24 @@
+{
+  "model": "gpt-4o-mini",
+  "temperature": 0.2,
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are a helpful assistant."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Say hello and tell me the time zone abbreviation for UTC-5."
+        }
+      ]
+    }
+  ]
+}

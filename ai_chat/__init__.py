@@ -3,6 +3,7 @@ import os
 import sys
 import azure.functions as func
 
+# Ensure we can import from the shared/ folder
 APP_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if APP_ROOT not in sys.path:
     sys.path.insert(0, APP_ROOT)
@@ -21,10 +22,12 @@ def _validate(payload):
     msgs = payload.get("messages")
     if not isinstance(msgs, list) or not msgs:
         raise ValueError("'messages' must be a non-empty array.")
+
     import json as _json
     encoded = _json.dumps(msgs)
     if len(encoded) > 120_000:
         raise ValueError("Prompt too large. Reduce message size.")
+
     temp = payload.get("temperature", 0.2)
     max_tokens = payload.get("max_output_tokens")
     if max_tokens is not None:
@@ -38,6 +41,16 @@ def _validate(payload):
     return msgs, float(temp), max_tokens, mdl
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    # CORS preflight support
+    if req.method == "OPTIONS":
+        # Adjust allowed origin if you want to restrict this
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type, x-correlation-id",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+        }
+        return func.HttpResponse(status_code=204, headers=headers)
+
     FoundryClient, get_logger, import_err = _lazy_imports()
     if import_err is not None:
         body = {"ok": False, "error": f"import_error: {import_err.__class__.__name__}: {import_err}"}
@@ -54,12 +67,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             corr = str(uuid.uuid4())
         logger.info("corr_id=%s ai_chat request", corr)
 
+        # For api-key auth we need both endpoint + key; for AAD this is ignored
         miss = [k for k in ("AZURE_AI_FOUNDRY_ENDPOINT","AZURE_AI_FOUNDRY_KEY") if not os.getenv(k)]
         if miss:
-            return func.HttpResponse(
-                json.dumps({"ok": False, "error": f"missing_app_settings: {', '.join(miss)}"}),
-                mimetype="application/json", status_code=500
-            )
+            logger.warning("Missing app settings: %s", ", ".join(miss))
 
         client = FoundryClient()
         text = client.chat(
@@ -68,11 +79,14 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             max_output_tokens=max_tokens,
             model=model_override
         )
+        headers = {"Content-Type":"application/json", "Access-Control-Allow-Origin":"*"}
         return func.HttpResponse(
             json.dumps({"ok": True, "content": text, "corr_id": corr}),
             mimetype="application/json",
-            status_code=200
+            status_code=200,
+            headers=headers
         )
     except Exception as e:
         logger.exception("ai_chat failed")
-        return func.HttpResponse(json.dumps({"ok": False, "error": str(e)}), mimetype="application/json", status_code=400)
+        headers = {"Content-Type":"application/json", "Access-Control-Allow-Origin":"*"}
+        return func.HttpResponse(json.dumps({"ok": False, "error": str(e)}), mimetype="application/json", status_code=400, headers=headers)

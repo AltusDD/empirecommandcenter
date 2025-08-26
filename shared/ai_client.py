@@ -1,3 +1,4 @@
+
 import os
 import json
 from typing import List, Dict, Any, Optional
@@ -7,8 +8,20 @@ from shared.logging_utils import get_logger
 
 logger = get_logger("altus.ai.client")
 
+# ========= Config =========
 DEFAULT_API_VERSION = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", "2024-10-01-preview")
 FORCE_REST = os.environ.get("AZURE_AI_FOUNDRY_FORCE_REST", "false").lower() == "true"
+# Allow ops to provide a comma-separated list of fallback versions
+FALLBACK_CANDIDATES = [
+    v.strip() for v in os.environ.get(
+        "AZURE_AI_FOUNDRY_API_VERSION_CANDIDATES",
+        "2024-12-01-preview,2025-02-01-preview,2024-10-01-preview,2024-05-01-preview"
+    ).split(",")
+    if v.strip()
+]
+
+# Cache the working api-version for the process lifetime
+_WORKING_API_VERSION: Optional[str] = None
 
 def _get_sdk_bits():
     try:
@@ -36,7 +49,6 @@ def _to_sdk_message(msg):
     if isinstance(content, str):
         content = [TextContentItem(text=content)]
     elif isinstance(content, list):
-        # assume already a list of TextContentItem-like; convert text entries
         new_items = []
         for item in content:
             if isinstance(item, str):
@@ -55,7 +67,7 @@ def _to_rest_message(msg: Dict[str, Any]) -> Dict[str, Any]:
     # Foundry REST expects: {"role": "...", "content": [{"type":"text","text":"..."}]}
     role = msg.get("role", "user")
     content = msg.get("content", "")
-    items: List[Dict[str, str]] = []
+    items = []
     if isinstance(content, str):
         items = [{"type": "text", "text": content}]
     elif isinstance(content, list):
@@ -63,7 +75,6 @@ def _to_rest_message(msg: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(it, str):
                 items.append({"type": "text", "text": it})
             elif isinstance(it, dict):
-                # allow {"text": "..."} or {"type":"text","text":"..."}
                 t = it.get("text") or it.get("value") or ""
                 items.append({"type": "text", "text": t})
     elif isinstance(content, dict):
@@ -107,6 +118,34 @@ class FoundryClient:
                 raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
             self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=AzureKeyCredential(self.key))
 
+    def _rest_call(self, body: Dict[str, Any], api_version: str) -> Dict[str, Any]:
+        import requests
+        url = f"{self.endpoint}/chat/completions?api-version={api_version}"
+        headers = {"Content-Type": "application/json"}
+        if self.auth_mode == "aad":
+            token = _get_aad_token("https://ai.azure.com/.default")
+            if not token:
+                raise RuntimeError("Failed to acquire AAD token for https://ai.azure.com/.default")
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            if not self.key:
+                raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
+            headers["api-key"] = self.key
+
+        r = requests.post(url, headers=headers, json=body, timeout=30)
+        if r.status_code in (401, 403):
+            try: err = r.json()
+            except Exception: err = r.text
+            raise HttpResponseError(message=f"{r.status_code} from Foundry: {err}", response=r)
+        if r.status_code == 400:
+            try: err = r.json()
+            except Exception: err = r.text
+            raise HttpResponseError(message=f"400 from Foundry: {err}", response=r)
+        if r.status_code >= 500:
+            raise HttpResponseError(message=f"{r.status_code} Server Error from Foundry", response=r)
+        r.raise_for_status()
+        return r.json()
+
     @retry(
         reraise=True,
         stop=stop_after_attempt(4),
@@ -120,11 +159,13 @@ class FoundryClient:
         max_output_tokens: Optional[int] = None,
         model: Optional[str] = None
     ) -> str:
+        # Guard big prompts
         if len(json.dumps(messages)) > 120_000:
             raise ValueError("Prompt too large. Reduce message size.")
 
         use_model = model or self.default_model
 
+        # SDK path (no api-version headaches)
         if self._sdk_client and not FORCE_REST:
             sdk_messages = [_to_sdk_message(m) for m in messages]
             resp = self._sdk_client.complete(
@@ -134,27 +175,10 @@ class FoundryClient:
             )
             choice = resp.choices[0]
             parts = getattr(choice.message, "content", None) or []
-            text = ""
-            for p in parts:
-                t = getattr(p, "text", None)
-                if t:
-                    text += t
+            text = "".join(getattr(p, "text", "") or "" for p in parts)
             return text.strip()
 
-        # Raw HTTP with correct REST message shape
-        import requests
-        url = f"{self.endpoint}/chat/completions?api-version={self.api_version}"
-        headers = {"Content-Type": "application/json"}
-        if self.auth_mode == "aad":
-            token = _get_aad_token("https://ai.azure.com/.default")
-            if not token:
-                raise RuntimeError("Failed to acquire AAD token for https://ai.azure.com/.default")
-            headers["Authorization"] = f"Bearer {token}"
-        else:
-            if not self.key:
-                raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
-            headers["api-key"] = self.key
-
+        # REST path with auto-version fallback
         body = {
             "model": use_model,
             "messages": [_to_rest_message(m) for m in messages],
@@ -163,24 +187,34 @@ class FoundryClient:
         if max_output_tokens is not None:
             body["max_tokens"] = int(max_output_tokens)
 
-        r = requests.post(url, headers=headers, json=body, timeout=30)
-        if r.status_code in (401, 403):
+        global _WORKING_API_VERSION
+        candidates = []
+        if _WORKING_API_VERSION:
+            candidates.append(_WORKING_API_VERSION)
+        candidates.append(self.api_version or DEFAULT_API_VERSION)
+        for v in FALLBACK_CANDIDATES:
+            if v not in candidates:
+                candidates.append(v)
+
+        last_err: Optional[str] = None
+        for v in candidates:
             try:
-                err = r.json()
-            except Exception:
-                err = r.text
-            raise HttpResponseError(message=f"{r.status_code} from Foundry: {err}", response=r)
-        if r.status_code == 400:
-            try:
-                err = r.json()
-            except Exception:
-                err = r.text
-            raise HttpResponseError(message=f"400 from Foundry: {err}", response=r)
-        if r.status_code >= 500:
-            raise HttpResponseError(message=f"{r.status_code} Server Error from Foundry", response=r)
-        r.raise_for_status()
-        data = r.json()
-        try:
-            return data["choices"][0]["message"]["content"]
-        except Exception:
-            return json.dumps(data)
+                data = self._rest_call(body, v)
+                _WORKING_API_VERSION = v  # cache
+                logger.info("Foundry REST succeeded with api-version=%s", v)
+                try:
+                    return data["choices"][0]["message"]["content"]
+                except Exception:
+                    return json.dumps(data)
+            except HttpResponseError as e:
+                msg = str(e)
+                last_err = msg
+                # Only keep probing if this is an api-version issue
+                if "API version not supported" in msg or "Api version not supported" in msg:
+                    logger.warning("API version %s not supported, trying next...", v)
+                    continue
+                # For other 400s, stop early
+                if "400 from Foundry" in msg:
+                    raise
+        # If we exhausted candidates
+        raise HttpResponseError(message=last_err or "All api-version candidates failed", response=None)

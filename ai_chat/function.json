@@ -1,5 +1,4 @@
 {
-  "scriptFile": "__init__.py",
   "bindings": [
     {
       "authLevel": "function",
@@ -7,8 +6,7 @@
       "direction": "in",
       "name": "req",
       "methods": [
-        "post",
-        "options"
+        "post"
       ],
       "route": "ai_chat"
     },
@@ -17,5 +15,6 @@
       "direction": "out",
       "name": "$return"
     }
-  ]
+  ],
+  "scriptFile": "__init__.py"
 }

@@ -1,13 +1,15 @@
 import logging
-import os
 
-def get_logger(name: str = "altus.ai"):
+_LEVEL = logging.INFO
+
+def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler()
-        fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s :: %(message)s")
-        handler.setFormatter(fmt)
+        formatter = logging.Formatter(
+            fmt="%(asctime)s %(levelname)s %(name)s - %(message)s"
+        )
+        handler.setFormatter(formatter)
         logger.addHandler(handler)
-        level = os.getenv("LOG_LEVEL", "INFO").upper()
-        logger.setLevel(level)
+    logger.setLevel(_LEVEL)
     return logger

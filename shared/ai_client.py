@@ -130,18 +130,20 @@ class FoundryClient:
 
         r = requests.post(url, headers=headers, json=body, timeout=30)
         if r.status_code in (401, 403):
+            # show server-provided reason
             try:
                 err = r.json()
             except Exception:
                 err = r.text
             raise HttpResponseError(message=f"{r.status_code} from Foundry: {err}", response=r)
-        if r.status_code >= 500:
-            raise HttpResponseError(message=f"{r.status_code} Server Error from Foundry", response=r)
         if r.status_code == 400:
             try:
-                raise HttpResponseError(message=r.json(), response=r)
+                err = r.json()
             except Exception:
-                r.raise_for_status()
+                err = r.text
+            raise HttpResponseError(message=f"400 from Foundry: {err}", response=r)
+        if r.status_code >= 500:
+            raise HttpResponseError(message=f"{r.status_code} Server Error from Foundry", response=r)
         r.raise_for_status()
         data = r.json()
         try:

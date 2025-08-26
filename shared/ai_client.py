@@ -37,14 +37,25 @@ def _get_aad_token(scope: str) -> Optional[str]:
     DefaultAzureCredential (avoids picking up local env/CLI creds).
     """
     try:
-        from azure.identity import ManagedIdentityCredential
-        mi = ManagedIdentityCredential()
-        token = mi.get_token(scope).token
-        return token
+        from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
+        try:
+            mi = ManagedIdentityCredential()
+            token = mi.get_token(scope).token
+            return token
+        except Exception as mi_err:
+            logger.warning("ManagedIdentityCredential failed: %s", mi_err)
+            dac = DefaultAzureCredential(
+                exclude_environment_credential=True,
+                exclude_shared_token_cache_credential=True,
+                exclude_visual_studio_code_credential=True,
+                exclude_powers_hell_credential=True,
+                exclude_interactive_browser_credential=True,
+                exclude_cli_credential=True
+            )
+            token = dac.get_token(scope).token
+            return token
     except Exception as e:
-        logger.error("ManagedIdentityCredential failed: %s", e)
-        # We no longer fall back to DefaultAzureCredential as it seems to cause issues.
-        # We will fail here with a clear error message.
+        logger.error("AAD credential acquisition failed: %s", e)
         return None
 
 def _to_sdk_message(msg: Dict[str, Any]):
@@ -115,9 +126,9 @@ class FoundryClient:
             return
 
         if self.auth_mode == "aad":
-            from azure.identity import ManagedIdentityCredential
+            from azure.identity import DefaultAzureCredential
+            credential = DefaultAzureCredential()
             try:
-                credential = ManagedIdentityCredential()
                 # Attempt to get a token immediately to surface AAD issues early
                 token = credential.get_token("https://ai.azure.com/.default")
                 logger.info("Successfully acquired AAD token during client init.")
@@ -137,6 +148,7 @@ class FoundryClient:
     def _rest_call(self, body: Dict[str, Any], api_version: str) -> Dict[str, Any]:
         import requests
         
+        # This is the line that needs to be fixed. It's missing the deployment name.
         url = f"{self.endpoint}/chat/completions?api-version={api_version}"
         headers = {"Content-Type": "application/json"}
         

@@ -1,44 +1,37 @@
-# shared/ai_client.py
 import os
-import json
-import logging
-from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from typing import List, Dict, Any, Optional
 
-import requests
 from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 from azure.core.exceptions import HttpResponseError, ServiceRequestError, ServiceResponseError
 
-# ---------- logging ----------
-logger = logging.getLogger("altus.ai.client")
-if not logger.handlers:
+# Logger (use your shared helper if present)
+try:
+    from shared.logging_utils import get_logger
+    logger = get_logger("altus.ai.client")
+except Exception:
+    import logging
     logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("altus.ai.client")
 
-# ---------- config from env (kept your existing names) ----------
-AUTH_MODE = os.environ.get("AZURE_AI_FOUNDRY_AUTH", "key").lower()               # "key" or "aad"
-ENDPOINT = (os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT", "")).rstrip("/")
-API_VERSION = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", "2025-01-01-preview")
-MODEL_OR_DEPLOYMENT = os.environ.get("AZURE_AI_FOUNDRY_MODEL", "gpt-4o-mini")    # for AOAI: deployment name
-API_KEY = os.environ.get("AZURE_AI_FOUNDRY_KEY")
-FORCE_REST = os.environ.get("AZURE_AI_FOUNDRY_FORCE_REST", "true").lower() == "true"
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+DEFAULT_API_VERSION = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", "2024-04-01-preview")
+FORCE_REST = os.environ.get("AZURE_AI_FOUNDRY_FORCE_REST", "false").lower() == "true"
+AAD_SCOPE = "https://ai.azure.com/.default"  # for AAD flows against Foundry project endpoints
 
-AAD_SCOPE = "https://ai.azure.com/.default"  # Only used for Models endpoints if AUTH_MODE == aad
+def _get_sdk_bits():
+    """SDK path is optional; REST fallback is always available."""
+    try:
+        from azure.ai.inference import ChatCompletionsClient
+        from azure.core.credentials import AzureKeyCredential
+        return ChatCompletionsClient, AzureKeyCredential
+    except Exception as e:
+        logger.info("azure.ai.inference SDK not available; using REST. (%s)", e)
+        return None, None
 
-def _endpoint_kind(endpoint: str) -> str:
-    """
-    Returns 'aoai' for Azure OpenAI (cognitiveservices) endpoints,
-            'models' for Azure AI Foundry 'models.ai.azure.com' endpoints.
-    """
-    host = urlparse(endpoint).hostname or ""
-    if "cognitiveservices.azure.com" in host:
-        return "aoai"
-    if "models.ai.azure.com" in host:
-        return "models"
-    # Default to models if unsure
-    return "models"
-
-def _aad_token(scope: str) -> Optional[str]:
-    """Get an AAD token (Managed Identity / DefaultAzureCredential)."""
+def _get_aad_token(scope: str) -> Optional[str]:
+    """Acquire an AAD token (used only if AZURE_AI_FOUNDRY_AUTH=aad)."""
     try:
         from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
         try:
@@ -50,14 +43,36 @@ def _aad_token(scope: str) -> Optional[str]:
                 exclude_environment_credential=True,
                 exclude_shared_token_cache_credential=True,
                 exclude_visual_studio_code_credential=True,
-                exclude_powershell_credential=True,  # typo fixed
+                exclude_powershell_credential=True,
                 exclude_interactive_browser_credential=True,
                 exclude_cli_credential=True,
             )
             return dac.get_token(scope).token
     except Exception as e:
-        logger.error("Failed to get AAD token: %s", e)
+        logger.error("AAD credential acquisition failed: %s", e)
         return None
+
+def _to_sdk_message(msg: Dict[str, Any]):
+    from azure.ai.inference.models import SystemMessage, UserMessage, AssistantMessage, TextContentItem
+    role = msg.get("role", "user")
+    content = msg.get("content", "")
+    items = []
+    if isinstance(content, str):
+        items = [TextContentItem(text=content)]
+    elif isinstance(content, list):
+        for it in content:
+            if isinstance(it, str):
+                items.append(TextContentItem(text=it))
+            elif isinstance(it, dict) and "text" in it:
+                items.append(TextContentItem(text=it["text"]))
+    else:
+        items = [TextContentItem(text=str(content))]
+    if role == "system":
+        return SystemMessage(content=items)
+    elif role == "assistant":
+        return AssistantMessage(content=items)
+    else:
+        return UserMessage(content=items)
 
 def _to_rest_message(msg: Dict[str, Any]) -> Dict[str, Any]:
     role = msg.get("role", "user")
@@ -80,69 +95,69 @@ def _to_rest_message(msg: Dict[str, Any]) -> Dict[str, Any]:
     return {"role": role, "content": items}
 
 class FoundryClient:
-    """
-    REST-only client that supports BOTH:
-      • Azure OpenAI endpoints (cognitiveservices): /openai/deployments/{deployment}/chat/completions
-      • Models endpoints (models.ai.azure.com): /chat/completions with 'model' in body
-    Auth modes:
-      • key  -> uses AZURE_AI_FOUNDRY_KEY header (api-key or Authorization)
-      • aad  -> uses MSI/DefaultAzureCredential (scope https://ai.azure.com/.default for models)
-    """
-
-    def __init__(self,
-                 endpoint: Optional[str] = None,
-                 key: Optional[str] = None,
-                 model: Optional[str] = None,
-                 api_version: Optional[str] = None,
-                 auth_mode: Optional[str] = None):
-        self.endpoint = (endpoint or ENDPOINT).rstrip("/")
-        self.key = key or API_KEY
-        self.model = model or MODEL_OR_DEPLOYMENT
-        self.api_version = api_version or API_VERSION
-        self.auth_mode = (auth_mode or AUTH_MODE).lower()
-
+    """Unified client for Azure AI Foundry project endpoints or Azure OpenAI endpoints."""
+    def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None, model: Optional[str] = None):
+        self.endpoint = (endpoint or os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT", "")).rstrip("/")
+        self.key = key or os.environ.get("AZURE_AI_FOUNDRY_KEY")
+        self.default_model = model or os.environ.get("AZURE_AI_FOUNDRY_MODEL", "gpt-4o-mini")
+        self.auth_mode = (os.environ.get("AZURE_AI_FOUNDRY_AUTH", "aad")).lower()   # "aad" or "key"
+        self.api_version = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", DEFAULT_API_VERSION)
         if not self.endpoint:
-            raise RuntimeError("Missing endpoint. Set AZURE_AI_FOUNDRY_ENDPOINT.")
-        if self.auth_mode == "key" and not self.key:
-            raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
+            raise RuntimeError("Missing Foundry/OpenAI endpoint. Set AZURE_AI_FOUNDRY_ENDPOINT.")
 
-        self.kind = _endpoint_kind(self.endpoint)  # 'aoai' or 'models'
-        logger.info("AI client init: kind=%s auth=%s api_version=%s endpoint=%s model=%s",
-                    self.kind, self.auth_mode, self.api_version, self.endpoint, self.model)
+        self._sdk_client = None
+        if not FORCE_REST:
+            self._init_sdk()
 
-    def _build_url(self) -> str:
-        if self.kind == "aoai":
-            # Azure OpenAI path requires deployments
-            return f"{self.endpoint}/openai/deployments/{self.model}/chat/completions?api-version={self.api_version}"
-        # Models path
-        return f"{self.endpoint}/chat/completions?api-version={self.api_version}"
+        logger.info("FoundryClient init: endpoint=%s auth=%s api_version=%s force_rest=%s",
+                    self.endpoint, self.auth_mode, self.api_version, FORCE_REST)
 
-    def _build_headers(self) -> Dict[str, str]:
+    def _init_sdk(self):
+        ChatCompletionsClient, AzureKeyCredential = _get_sdk_bits()
+        if ChatCompletionsClient is None:
+            return
+        if self.auth_mode == "aad":
+            from azure.identity import DefaultAzureCredential
+            cred = DefaultAzureCredential()
+            try:
+                cred.get_token(AAD_SCOPE)
+                self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=cred)
+                logger.info("SDK client ready (AAD).")
+            except Exception as e:
+                logger.error("Failed to init SDK (AAD): %s", e)
+                self._sdk_client = None
+        else:
+            if not self.key:
+                raise RuntimeError("AZURE_AI_FOUNDRY_KEY required for key auth.")
+            self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=AzureKeyCredential(self.key))
+            logger.info("SDK client ready (api-key).")
+
+    def _rest_call(self, body: Dict[str, Any], api_version: str, deployment: str) -> Dict[str, Any]:
+        import requests
+        # IMPORTANT: Azure OpenAI endpoints require /openai/deployments/{deployment}/...
+        url = f"{self.endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
         headers = {"Content-Type": "application/json"}
-        if self.auth_mode == "key":
-            # Azure OpenAI expects 'api-key'; Models accepts 'api-key' or 'Authorization: Bearer'
+        if self.auth_mode == "aad":
+            token = _get_aad_token(AAD_SCOPE)
+            if not token:
+                raise RuntimeError("Failed to acquire AAD token for https://ai.azure.com/.default")
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            if not self.key:
+                raise RuntimeError("AZURE_AI_FOUNDRY_KEY required for key auth.")
             headers["api-key"] = self.key
-            return headers
-        # AAD
-        scope = AAD_SCOPE if self.kind == "models" else "https://cognitiveservices.azure.com/.default"
-        token = _aad_token(scope)
-        if not token:
-            raise RuntimeError(f"Failed to acquire AAD token for scope: {scope}")
-        headers["Authorization"] = f"Bearer {token}"
-        return headers
 
-    def _build_body(self, messages: List[Dict[str, Any]], temperature: float, max_tokens: Optional[int]) -> Dict[str, Any]:
-        body: Dict[str, Any] = {
-            "messages": [_to_rest_message(m) for m in messages],
-            "temperature": temperature,
-        }
-        if max_tokens is not None:
-            body["max_tokens"] = int(max_tokens)
-        # For Models endpoint, pass the model name in the body
-        if self.kind == "models":
-            body["model"] = self.model
-        # For Azure OpenAI, DO NOT include "model" in body (deployment already in the path)
-        return body
+        r = requests.post(url, headers=headers, json=body, timeout=30)
+        if r.status_code in (400, 401, 403, 404):
+            try:
+                detail = r.json()
+            except Exception:
+                detail = r.text
+            raise HttpResponseError(message=f"{r.status_code} from Foundry/OpenAI: {detail}", response=r)
+        if r.status_code >= 500:
+            raise HttpResponseError(message=f"{r.status_code} server error from Foundry/OpenAI", response=r)
+        r.raise_for_status()
+        return r.json()
 
     @retry(
         reraise=True,
@@ -150,30 +165,39 @@ class FoundryClient:
         wait=wait_random_exponential(multiplier=0.5, max=6.0),
         retry=retry_if_exception_type((HttpResponseError, ServiceRequestError, ServiceResponseError)),
     )
-    def chat(self,
-             messages: List[Dict[str, Any]],
-             temperature: float = 0.2,
-             max_output_tokens: Optional[int] = None) -> str:
-        url = self._build_url()
-        headers = self._build_headers()
-        body = self._build_body(messages, temperature, max_output_tokens)
+    def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float = 0.2,
+        max_output_tokens: Optional[int] = None,
+        model: Optional[str] = None,
+    ) -> str:
+        """
+        Send a chat completion. `model` is the deployment name when using Azure OpenAI endpoints.
+        """
+        use_model = (model or self.default_model)
 
-        resp = requests.post(url, headers=headers, json=body, timeout=30)
-        if resp.status_code >= 400:
-            # try to unwrap JSON error
-            try:
-                detail = resp.json()
-            except Exception:
-                detail = resp.text
-            if resp.status_code >= 500:
-                raise HttpResponseError(message=f"{resp.status_code} Server Error: {detail}", response=resp)
-            raise HttpResponseError(message=f"{resp.status_code} from service: {detail}", response=resp)
+        # SDK path (if available)
+        if self._sdk_client and not FORCE_REST:
+            sdk_messages = [_to_sdk_message(m) for m in messages]
+            resp = self._sdk_client.complete(
+                model=use_model,
+                messages=sdk_messages,
+                temperature=temperature,
+            )
+            choice = resp.choices[0]
+            parts = getattr(choice.message, "content", None) or []
+            text = "".join(getattr(p, "text", "") or "" for p in parts)
+            return text.strip()
 
-        data = resp.json()
-        # unify text extraction
-        try:
-            return data["choices"][0]["message"]["content"] or ""
-        except Exception:
-            # some previews may return choices[0].delta or similar; fall back to dumping data for visibility
-            logger.warning("Unexpected response shape: %s", json.dumps(data)[:500])
-            return ""
+        # REST path
+        body = {
+            "model": use_model,
+            "messages": [_to_rest_message(m) for m in messages],
+            "temperature": temperature,
+        }
+        if max_output_tokens is not None:
+            body["max_tokens"] = int(max_output_tokens)
+
+        data = self._rest_call(body, self.api_version, deployment=use_model)
+        return data["choices"][0]["message"]["content"]

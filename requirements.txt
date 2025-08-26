@@ -1,7 +1,7 @@
 azure-functions>=1.23.0
 azure-ai-inference==1.0.0b9  # Explicitly pin to the latest beta version
 azure-core>=1.30.0
-azure-identity>=1.16.0
+azure-identity>=1.17.1
 tenacity>=8.2.3
-requests>=2.32.0
+requests>=2.32.3
 openai>=1.51.0

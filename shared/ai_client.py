@@ -7,7 +7,7 @@ from shared.logging_utils import get_logger
 
 logger = get_logger("altus.ai.client")
 
-DEFAULT_API_VERSION = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", "2024-05-01-preview")
+DEFAULT_API_VERSION = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", "2024-10-01-preview")
 FORCE_REST = os.environ.get("AZURE_AI_FOUNDRY_FORCE_REST", "false").lower() == "true"
 
 def _get_sdk_bits():
@@ -28,6 +28,50 @@ def _get_aad_token(scope: str) -> Optional[str]:
     except Exception as e:
         logger.error("DefaultAzureCredential failed: %s", e)
         return None
+
+def _to_sdk_message(msg):
+    from azure.ai.inference.models import SystemMessage, UserMessage, AssistantMessage, TextContentItem
+    role = msg.get("role")
+    content = msg.get("content")
+    if isinstance(content, str):
+        content = [TextContentItem(text=content)]
+    elif isinstance(content, list):
+        # assume already a list of TextContentItem-like; convert text entries
+        new_items = []
+        for item in content:
+            if isinstance(item, str):
+                new_items.append(TextContentItem(text=item))
+            elif isinstance(item, dict) and "text" in item:
+                new_items.append(TextContentItem(text=item["text"]))
+        content = new_items or [TextContentItem(text="")]
+    if role == "system":
+        return SystemMessage(content=content)
+    elif role == "assistant":
+        return AssistantMessage(content=content)
+    else:
+        return UserMessage(content=content)
+
+def _to_rest_message(msg: Dict[str, Any]) -> Dict[str, Any]:
+    # Foundry REST expects: {"role": "...", "content": [{"type":"text","text":"..."}]}
+    role = msg.get("role", "user")
+    content = msg.get("content", "")
+    items: List[Dict[str, str]] = []
+    if isinstance(content, str):
+        items = [{"type": "text", "text": content}]
+    elif isinstance(content, list):
+        for it in content:
+            if isinstance(it, str):
+                items.append({"type": "text", "text": it})
+            elif isinstance(it, dict):
+                # allow {"text": "..."} or {"type":"text","text":"..."}
+                t = it.get("text") or it.get("value") or ""
+                items.append({"type": "text", "text": t})
+    elif isinstance(content, dict):
+        t = content.get("text") or content.get("value") or ""
+        items.append({"type": "text", "text": t})
+    if not items:
+        items = [{"type": "text", "text": ""}]
+    return {"role": role, "content": items}
 
 class FoundryClient:
     def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None, model: Optional[str] = None):
@@ -82,20 +126,7 @@ class FoundryClient:
         use_model = model or self.default_model
 
         if self._sdk_client and not FORCE_REST:
-            from azure.ai.inference.models import SystemMessage, UserMessage, AssistantMessage, TextContentItem
-            def to_sdk(msg):
-                role = msg.get("role")
-                content = msg.get("content")
-                if isinstance(content, str):
-                    content = [TextContentItem(text=content)]
-                if role == "system":
-                    return SystemMessage(content=content)
-                elif role == "assistant":
-                    return AssistantMessage(content=content)
-                else:
-                    return UserMessage(content=content)
-
-            sdk_messages = [to_sdk(m) for m in messages]
+            sdk_messages = [_to_sdk_message(m) for m in messages]
             resp = self._sdk_client.complete(
                 model=use_model,
                 messages=sdk_messages,
@@ -110,7 +141,7 @@ class FoundryClient:
                     text += t
             return text.strip()
 
-        # Raw HTTP
+        # Raw HTTP with correct REST message shape
         import requests
         url = f"{self.endpoint}/chat/completions?api-version={self.api_version}"
         headers = {"Content-Type": "application/json"}
@@ -124,13 +155,16 @@ class FoundryClient:
                 raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
             headers["api-key"] = self.key
 
-        body = {"model": use_model, "messages": messages, "temperature": temperature}
+        body = {
+            "model": use_model,
+            "messages": [_to_rest_message(m) for m in messages],
+            "temperature": temperature
+        }
         if max_output_tokens is not None:
             body["max_tokens"] = int(max_output_tokens)
 
         r = requests.post(url, headers=headers, json=body, timeout=30)
         if r.status_code in (401, 403):
-            # show server-provided reason
             try:
                 err = r.json()
             except Exception:

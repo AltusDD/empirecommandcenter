@@ -1,92 +1,105 @@
+
 import os
-import json
-from typing import Any, Dict, List, Optional
+from typing import List, Dict, Any, Optional
 from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 from azure.core.exceptions import HttpResponseError, ServiceRequestError, ServiceResponseError
 
-# -------- logger (safe fallback) --------
 try:
     from shared.logging_utils import get_logger
     logger = get_logger("altus.ai.client")
-except Exception:  # pragma: no cover
+except Exception:
     import logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("altus.ai.client")
 
-# -------- config --------
 DEFAULT_API_VERSION = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", "2024-04-01-preview")
-FORCE_REST = True  # using REST for Azure OpenAI endpoints
+AAD_SCOPE = "https://ai.azure.com/.default"
 
 class FoundryClient:
     """
-    Simple client for Azure OpenAI (cognitiveservices) chat completions using REST.
-    Env required:
-      - AZURE_AI_FOUNDRY_ENDPOINT: https://<res>.cognitiveservices.azure.com
-      - AZURE_AI_FOUNDRY_MODEL:    <deployment-name> (e.g., gpt-4o-mini)
-      - AZURE_AI_FOUNDRY_API_VERSION: 2024-04-01-preview
-      - AZURE_AI_FOUNDRY_KEY:      <api key>
+    Minimal client for Azure OpenAI (Cognitive Services endpoint) chat completions.
+    Uses API key auth by default (AZURE_AI_FOUNDRY_AUTH=key). AAD not enabled in this build.
     """
     def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None, model: Optional[str] = None):
         self.endpoint = (endpoint or os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT", "")).rstrip("/")
         self.key = key or os.environ.get("AZURE_AI_FOUNDRY_KEY")
         self.default_model = model or os.environ.get("AZURE_AI_FOUNDRY_MODEL", "gpt-4o-mini")
         self.api_version = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", DEFAULT_API_VERSION)
-
+        self.auth_mode = (os.environ.get("AZURE_AI_FOUNDRY_AUTH", "key")).lower()
         if not self.endpoint:
             raise RuntimeError("Missing AZURE_AI_FOUNDRY_ENDPOINT")
-        if not self.key:
-            raise RuntimeError("Missing AZURE_AI_FOUNDRY_KEY")
+        if self.auth_mode != "key":
+            logger.warning("This build is configured for 'key' auth. Current auth=%s", self.auth_mode)
 
-    def _rest_call(self, body: Dict[str, Any], model: str, api_version: str) -> Dict[str, Any]:
+    def _rest_call(self, body: Dict[str, Any], api_version: str) -> Dict[str, Any]:
         import requests
+        # Model is the deployment name for Azure OpenAI
+        model = body.get("model") or self.default_model
+        body["model"] = model
+
         url = f"{self.endpoint}/openai/deployments/{model}/chat/completions?api-version={api_version}"
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": self.key,
-        }
+        headers = {"Content-Type": "application/json"}
+        if self.auth_mode == "key":
+            if not self.key:
+                raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
+            headers["api-key"] = self.key
+        else:
+            raise RuntimeError("AAD auth not enabled in this build. Set AZURE_AI_FOUNDRY_AUTH=key.")
+
         r = requests.post(url, headers=headers, json=body, timeout=30)
         if r.status_code >= 400:
             try:
-                detail = r.json()
+                err = r.json()
             except Exception:
-                detail = r.text
-            raise HttpResponseError(message=f"{r.status_code} from service: {detail}", response=r)
+                err = r.text
+            raise HttpResponseError(message=f"{r.status_code} from Foundry: {err}", response=r)
         return r.json()
 
     @retry(
         reraise=True,
-        stop=stop_after_attempt(4),
-        wait=wait_random_exponential(multiplier=0.5, max=6.0),
-        retry=retry_if_exception_type((HttpResponseError, ServiceRequestError, ServiceResponseError)),
+        stop=stop_after_attempt(3),
+        wait=wait_random_exponential(multiplier=0.5, max=4.0),
+        retry=retry_if_exception_type((HttpResponseError, ServiceRequestError, ServiceResponseError))
     )
-    def chat(
-        self,
-        messages: List[Dict[str, Any]],
-        temperature: float = 0.2,
-        max_output_tokens: Optional[int] = None,
-        model: Optional[str] = None,
-    ) -> str:
-        use_model = model or self.default_model
+    def chat(self,
+             messages: List[Dict[str, Any]],
+             temperature: float = 0.2,
+             max_output_tokens: Optional[int] = None,
+             model: Optional[str] = None) -> str:
         body: Dict[str, Any] = {
             "messages": [_to_rest_message(m) for m in messages],
             "temperature": temperature,
-            "model": use_model
         }
+        if model:
+            body["model"] = model
         if max_output_tokens is not None:
             body["max_tokens"] = int(max_output_tokens)
+        data = self._rest_call(body, self.api_version)
+        return _extract_text_from_resp(data)
 
-        data = self._rest_call(body, use_model, self.api_version)
-        # Azure OpenAI response shape
-        try:
-            return data["choices"][0]["message"]["content"]
-        except Exception:
-            logger.warning("Unexpected response: %s", json.dumps(data)[:500])
-            raise RuntimeError("Failed to parse model response.")
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_random_exponential(multiplier=0.5, max=4.0),
+        retry=retry_if_exception_type((HttpResponseError, ServiceRequestError, ServiceResponseError))
+    )
+    def raw_chat(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Pass-through helper for advanced features (tools, tool_choice, etc.)."""
+        # Normalize messages and max tokens if the caller used alt names
+        if "messages" in body:
+            body["messages"] = [_to_rest_message(m) for m in body["messages"]]
+        if "max_output_tokens" in body and "max_tokens" not in body:
+            try:
+                body["max_tokens"] = int(body.pop("max_output_tokens"))
+            except Exception:
+                body.pop("max_output_tokens", None)
+        data = self._rest_call(body, self.api_version)
+        return data
 
 def _to_rest_message(msg: Dict[str, Any]) -> Dict[str, Any]:
     role = msg.get("role", "user")
     content = msg.get("content", "")
-    items: List[Dict[str, str]] = []
+    items = []
     if isinstance(content, str):
         items = [{"type": "text", "text": content}]
     elif isinstance(content, list):
@@ -102,3 +115,17 @@ def _to_rest_message(msg: Dict[str, Any]) -> Dict[str, Any]:
     if not items:
         items = [{"type": "text", "text": ""}]
     return {"role": role, "content": items}
+
+def _extract_text_from_resp(data: Dict[str, Any]) -> str:
+    try:
+        choice = data["choices"][0]
+        msg = choice.get("message", {})
+        if isinstance(msg.get("content"), str):
+            return msg.get("content", "").strip()
+        # content may be a list of parts in some responses - handle gracefully
+        parts = msg.get("content") or []
+        if isinstance(parts, list):
+            return "".join([p.get("text", "") for p in parts if isinstance(p, dict)]).strip()
+        return str(msg.get("content", "")).strip()
+    except Exception:
+        return ""

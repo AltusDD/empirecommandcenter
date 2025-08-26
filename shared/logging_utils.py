@@ -1,15 +1,13 @@
-import logging
 
-_LEVEL = logging.INFO
+import logging, os
 
-def get_logger(name: str) -> logging.Logger:
+def get_logger(name: str):
+    level = os.environ.get("LOG_LEVEL","INFO").upper()
     logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler()
-        formatter = logging.Formatter(
-            fmt="%(asctime)s %(levelname)s %(name)s - %(message)s"
-        )
-        handler.setFormatter(formatter)
+        fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
+        handler.setFormatter(fmt)
         logger.addHandler(handler)
-    logger.setLevel(_LEVEL)
+    logger.setLevel(getattr(logging, level, logging.INFO))
     return logger

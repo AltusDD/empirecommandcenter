@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 from azure.core.exceptions import HttpResponseError, ServiceRequestError, ServiceResponseError
 
-# Use your existing logger helper. If you don't have it, replace with print()
+# Use your existing logger helper. If you don't have it, fallback to std logging.
 try:
     from shared.logging_utils import get_logger
     logger = get_logger("altus.ai.client")
@@ -101,10 +101,10 @@ def _to_sdk_message(msg: Dict[str, Any]):
         return UserMessage(content=items)
 
 def _to_rest_message(msg: Dict[str, Any]) -> Dict[str, Any]:
-    """Foundry REST expects content to be an array of {type:'text', text:'...'}.\"""
+    """Foundry REST expects content to be an array of {type:'text', text:'...'}."""
     role = msg.get("role", "user")
     content = msg.get("content", "")
-    items = []
+    items: List[Dict[str, str]] = []
     if isinstance(content, str):
         items = [{"type": "text", "text": content}]
     elif isinstance(content, list):

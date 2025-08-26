@@ -1,7 +1,5 @@
 import os
 import json
-import time
-import base64
 from typing import List, Dict, Any, Optional
 
 from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
@@ -24,22 +22,6 @@ DEFAULT_API_VERSION = os.environ.get("AZURE_AI_FOUNDRY_API_VERSION", "2024-04-01
 FORCE_REST = os.environ.get("AZURE_AI_FOUNDRY_FORCE_REST", "false").lower() == "true"
 AAD_SCOPE = "https://ai.azure.com/.default"  # Required scope for Foundry project endpoints
 
-def _log_token_claims(token: str) -> None:
-    """Log aud/iss/exp for troubleshooting (never logs the token)."""
-    try:
-        parts = token.split(".")
-        if len(parts) < 2:
-            return
-        pad = "=" * (-len(parts[1]) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(parts[1] + pad).decode("utf-8"))
-        aud = payload.get("aud")
-        iss = payload.get("iss")
-        exp = payload.get("exp")
-        exp_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp)) if exp else None
-        logger.info("AAD token claims: aud=%s iss=%s exp=%s", aud, iss, exp_iso)
-    except Exception as e:
-        logger.warning("Failed to log token claims: %s", e)
-
 def _get_sdk_bits():
     try:
         from azure.ai.inference import ChatCompletionsClient
@@ -59,7 +41,6 @@ def _get_aad_token(scope: str) -> Optional[str]:
         try:
             mi = ManagedIdentityCredential()
             token = mi.get_token(scope).token
-            _log_token_claims(token)
             return token
         except Exception as mi_err:
             logger.warning("ManagedIdentityCredential failed: %s", mi_err)
@@ -67,12 +48,11 @@ def _get_aad_token(scope: str) -> Optional[str]:
                 exclude_environment_credential=True,
                 exclude_shared_token_cache_credential=True,
                 exclude_visual_studio_code_credential=True,
-                exclude_powershell_credential=True,
+                exclude_powers_hell_credential=True,
                 exclude_interactive_browser_credential=True,
-                exclude_cli_credential=True  # avoid accidental local 'az' profile
+                exclude_cli_credential=True
             )
             token = dac.get_token(scope).token
-            _log_token_claims(token)
             return token
     except Exception as e:
         logger.error("AAD credential acquisition failed: %s", e)
@@ -101,7 +81,6 @@ def _to_sdk_message(msg: Dict[str, Any]):
         return UserMessage(content=items)
 
 def _to_rest_message(msg: Dict[str, Any]) -> Dict[str, Any]:
-    """Foundry REST expects content to be an array of {type:'text', text:'...'}."""
     role = msg.get("role", "user")
     content = msg.get("content", "")
     items: List[Dict[str, str]] = []
@@ -147,29 +126,49 @@ class FoundryClient:
             return
 
         if self.auth_mode == "aad":
-            # Wrap DAC to force the exact Foundry scope regardless of internal SDK asks.
             from azure.identity import DefaultAzureCredential
-            class _ScopeAdapter:
-                def __init__(self, inner):
-                    self._inner = inner
-                def get_token(self, *_, **__):  # ignore requested scopes; always use Foundry
-                    return self._inner.get_token(AAD_SCOPE)
-
-            credential = _ScopeAdapter(DefaultAzureCredential(
-                exclude_environment_credential=True,
-                exclude_shared_token_cache_credential=True,
-                exclude_visual_studio_code_credential=True,
-                exclude_powershell_credential=True,
-                exclude_interactive_browser_credential=True,
-            ))
+            credential = DefaultAzureCredential()
             self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=credential)
-            logger.info("Initialized SDK client with AAD (scope forced to %s).", AAD_SCOPE)
+            logger.info("Initialized SDK client with AAD managed identity.")
         else:
             if not self.key:
                 raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
             self._sdk_client = ChatCompletionsClient(endpoint=self.endpoint, credential=AzureKeyCredential(self.key))
             logger.info("Initialized SDK client with api-key auth.")
 
+    def _rest_call(self, body: Dict[str, Any], api_version: str) -> Dict[str, Any]:
+        import requests
+        from azure.identity import DefaultAzureCredential
+        
+        url = f"{self.endpoint}/chat/completions?api-version={api_version}"
+        headers = {"Content-Type": "application/json"}
+        
+        if self.auth_mode == "aad":
+            try:
+                cred = DefaultAzureCredential()
+                token = cred.get_token("https://ai.azure.com/.default")
+                headers["Authorization"] = f"Bearer {token.token}"
+            except Exception as e:
+                raise RuntimeError(f"Failed to acquire AAD token: {e}")
+        else:
+            if not self.key:
+                raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
+            headers["api-key"] = self.key
+
+        r = requests.post(url, headers=headers, json=body, timeout=30)
+        
+        if r.status_code in (401, 403, 400):
+            try:
+                err = r.json()
+            except Exception:
+                err = r.text
+            raise HttpResponseError(message=f"{r.status_code} from Foundry: {err}", response=r)
+        if r.status_code >= 500:
+            raise HttpResponseError(message=f"{r.status_code} Server Error from Foundry", response=r)
+            
+        r.raise_for_status()
+        return r.json()
+    
     @retry(
         reraise=True,
         stop=stop_after_attempt(4),
@@ -200,20 +199,6 @@ class FoundryClient:
             return text.strip()
 
         # REST path (if forced)
-        import requests
-        url = f"{self.endpoint}/chat/completions?api-version={self.api_version}"
-        headers = {"Content-Type": "application/json"}
-
-        if self.auth_mode == "aad":
-            token = _get_aad_token(AAD_SCOPE)
-            if not token:
-                raise RuntimeError("Failed to acquire AAD token for https://ai.azure.com/.default")
-            headers["Authorization"] = f"Bearer {token}"
-        else:
-            if not self.key:
-                raise RuntimeError("AZURE_AI_FOUNDRY_KEY is required for key auth.")
-            headers["api-key"] = self.key
-
         body = {
             "model": use_model,
             "messages": [_to_rest_message(m) for m in messages],
@@ -221,36 +206,11 @@ class FoundryClient:
         }
         if max_output_tokens is not None:
             body["max_tokens"] = int(max_output_tokens)
-
-        r = requests.post(url, headers=headers, json=body, timeout=30)
-        if r.status_code in (401, 403):
-            try:
-                err = r.json()
-            except Exception:
-                err = r.text
-            raise HttpResponseError(message=f"{r.status_code} from Foundry: {err}", response=r)
-
-        if r.status_code == 400:
-            try:
-                err = r.json()
-            except Exception:
-                err = r.text
-            # Helpful hint for recurring issue
-            if "API version not supported" in str(err) or "Api version not supported" in str(err):
-                raise HttpResponseError(
-                    message=("400 from Foundry: API version not supported. "
-                             "Set AZURE_AI_FOUNDRY_API_VERSION=2024-04-01-preview "
-                             "or set AZURE_AI_FOUNDRY_FORCE_REST=false to prefer SDK."),
-                    response=r
-                )
-            raise HttpResponseError(message=f"400 from Foundry: {err}", response=r)
-
-        if r.status_code >= 500:
-            raise HttpResponseError(message=f"{r.status_code} Server Error from Foundry", response=r)
-
-        r.raise_for_status()
-        data = r.json()
+        
         try:
+            data = self._rest_call(body, self.api_version)
+            logger.info("Foundry REST succeeded with api-version=%s", self.api_version)
             return data["choices"][0]["message"]["content"]
-        except Exception:
-            return json.dumps(data)
+        except HttpResponseError as e:
+            logger.warning("Foundry REST call failed with: %s", str(e))
+            raise e
